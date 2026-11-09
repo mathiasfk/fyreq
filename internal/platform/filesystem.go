@@ -4,6 +4,7 @@ package platform
 import (
 	"context"
 	"io/fs"
+	"os/user"
 	"path/filepath"
 	"time"
 
@@ -15,6 +16,7 @@ type Filesystem struct{}
 
 func (Filesystem) Scan(ctx context.Context, root string, visit func(catalog.File) error) (catalog.Coverage, error) {
 	report := catalog.Coverage{Root: root, StartedAt: time.Now().UTC()}
+	owners := ownerResolver{lookup: user.LookupId, names: make(map[int64]*string)}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -37,9 +39,11 @@ func (Filesystem) Scan(ctx context.Context, root string, visit func(catalog.File
 		case info.Mode()&fs.ModeSymlink != 0:
 			kind = "symlink"
 		}
+		uid := ownershipUID(info)
 		return visit(catalog.File{
 			Path: path, Name: filepath.Base(path), Kind: kind, Size: info.Size(),
 			ModifiedAt: info.ModTime().UTC(), IndexedAt: time.Now().UTC(), Identity: identity(info),
+			UID: uid, Owner: owners.resolve(uid),
 		})
 	})
 	report.CompletedAt = time.Now().UTC()

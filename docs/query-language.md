@@ -26,14 +26,24 @@ Backslashes are literal characters rather than escape sequences.
 | `size` | Integer | OS-reported size in bytes, not recursive directory usage |
 | `modified_at` | Timestamp | Observed last modification time |
 | `indexed_at` | Timestamp | Time this record was observed |
+| `uid` | Nullable integer | Numeric filesystem owner ID, collected on macOS |
+| `owner` | Nullable string | Owner account name resolved at collection time |
 
 `SELECT *` expands to the fields in the order above. Native filesystem identity
 is stored internally and is not a query field yet.
 
+Ownership means the filesystem owner, not the document author or original
+creator. The account name is resolved once per UID per scan and can be unavailable
+even when the numeric UID is known. Ownership of symlinks describes the link.
+Older catalogs remain readable: records without these optional fields return
+`null` until refreshed. Unsupported platforms also leave ownership unavailable.
+Unavailable values appear as `null` in JSON and `NULL` in text output. They never
+satisfy a comparison, including `!=`. `IS NULL` is not supported yet.
+
 ## Comparisons
 
 Supported operators are `=`, `!=`, `<`, `<=`, `>`, and `>=`. String ordering is
-lexical. Size literals are unquoted non-negative signed 64-bit integers.
+lexical. Size and UID literals are unquoted non-negative signed 64-bit integers.
 Timestamp literals must be single-quoted RFC 3339 values with a timezone; they
 are compared as instants, including fractional seconds when present.
 
@@ -42,6 +52,8 @@ SELECT path, size FROM files WHERE kind = 'file' AND size >= 1048576 LIMIT 20
 SELECT path FROM files WHERE name = 'O''Brien'
 SELECT path, modified_at FROM files WHERE modified_at >= '2026-01-01T00:00:00Z'
 SELECT path FROM files WHERE path = '/Users/example/Projects/app/main.go'
+SELECT path, uid, owner FROM files WHERE owner = 'root'
+SELECT path FROM files WHERE uid = 0
 ```
 
 Results are ordered by absolute path before applying `LIMIT`. `LIMIT 0` produces

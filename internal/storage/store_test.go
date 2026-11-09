@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,47 @@ import (
 
 	"fyreq/internal/catalog"
 )
+
+func TestLegacyCatalogOwnershipAndRoundTrip(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	path := filepath.Join(t.TempDir(), "file")
+	legacy := map[string]any{
+		"version": 1, "coverage": map[string]any{},
+		"files": map[string]any{path: map[string]any{"id": "legacy", "path": path}},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir, "catalog.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file := snapshot.Files[path]; file.UID != nil || file.Owner != nil {
+		t.Fatalf("legacy record must have unknown ownership: %#v", file)
+	}
+	uid, owner := int64(0), "root"
+	if err := store.Update(ctx, func(s *catalog.Snapshot) error {
+		file := s.Files[path]
+		file.UID, file.Owner = &uid, &owner
+		s.Files[path] = file
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := snapshot.Files[path]
+	if file.ID != "legacy" || file.UID == nil || *file.UID != 0 || file.Owner == nil || *file.Owner != owner {
+		t.Fatalf("ownership was not preserved: %#v", file)
+	}
+}
 
 func TestPersistenceAndFailedUpdate(t *testing.T) {
 	ctx := context.Background()

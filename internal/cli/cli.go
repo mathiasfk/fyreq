@@ -102,6 +102,8 @@ func Run(ctx context.Context, args []string, defaultDir string, build func(strin
 			cells := make([]string, len(row))
 			for i, value := range row {
 				switch v := value.(type) {
+				case nil:
+					cells[i] = "NULL"
 				case string:
 					// Filenames can contain tabs, newlines, or terminal controls.
 					cells[i] = strconv.Quote(v)

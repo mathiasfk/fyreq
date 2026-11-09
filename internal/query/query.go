@@ -15,7 +15,7 @@ import (
 	"fyreq/internal/catalog"
 )
 
-var fields = []string{"id", "path", "name", "kind", "size", "modified_at", "indexed_at"}
+var fields = []string{"id", "path", "name", "kind", "size", "modified_at", "indexed_at", "uid", "owner"}
 
 type predicate struct {
 	field string
@@ -192,10 +192,10 @@ func Parse(input string) (Plan, error) {
 			}
 			var value any
 			switch field {
-			case "size":
+			case "size", "uid":
 				v, err := strconv.ParseInt(literal.text, 10, 64)
 				if err != nil || literal.quoted || v < 0 {
-					return plan, fmt.Errorf("size requires a non-negative integer")
+					return plan, fmt.Errorf("%s requires a non-negative integer", field)
 				}
 				value = v
 			case "modified_at", "indexed_at":
@@ -258,24 +258,39 @@ func value(file catalog.File, field string) any {
 		return file.ModifiedAt
 	case "indexed_at":
 		return file.IndexedAt
+	case "uid":
+		if file.UID != nil {
+			return *file.UID
+		}
+		return nil
+	case "owner":
+		if file.Owner != nil {
+			return *file.Owner
+		}
+		return nil
 	}
 	panic("unvalidated query field")
 }
 
 func matches(file catalog.File, p predicate) bool {
+	got := value(file, p.field)
+	// Unavailable metadata never satisfies a comparison, including inequality.
+	if got == nil {
+		return false
+	}
 	var comparison int
 	switch want := p.value.(type) {
 	case string:
-		comparison = strings.Compare(value(file, p.field).(string), want)
+		comparison = strings.Compare(got.(string), want)
 	case int64:
-		got := value(file, p.field).(int64)
-		if got < want {
+		number := got.(int64)
+		if number < want {
 			comparison = -1
-		} else if got > want {
+		} else if number > want {
 			comparison = 1
 		}
 	case time.Time:
-		comparison = value(file, p.field).(time.Time).Compare(want)
+		comparison = got.(time.Time).Compare(want)
 	}
 	switch p.op {
 	case "=":

@@ -57,6 +57,8 @@ func TestRejectInvalidQueries(t *testing.T) {
 		"SELECT * FROM files WHERE size >", "SELECT * FROM files WHERE size > 1 AND",
 		"SELECT * FROM files; SELECT * FROM files", "SELECT 'path' FROM files",
 		"SELECT * FROM files WHERE kind = 'file' OR size = 1",
+		"SELECT * FROM files WHERE uid = '0'", "SELECT * FROM files WHERE uid = -1",
+		"SELECT * FROM files WHERE owner = root", "SELECT * FROM files WHERE uid = 9223372036854775808",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			if _, err := Parse(sql); err == nil {
@@ -66,13 +68,40 @@ func TestRejectInvalidQueries(t *testing.T) {
 	}
 }
 
+func TestOwnershipQueriesAndUnavailableValues(t *testing.T) {
+	uid, owner := int64(0), "root"
+	files := map[string]catalog.File{
+		"/known":      {Path: "/known", UID: &uid, Owner: &owner},
+		"/unknown":    {Path: "/unknown"},
+		"/unresolved": {Path: "/unresolved", UID: &uid},
+	}
+	for _, tc := range []struct {
+		sql  string
+		want [][]any
+	}{
+		{"SELECT path, uid, owner FROM files WHERE owner = 'root' AND uid = 0", [][]any{{"/known", int64(0), "root"}}},
+		{"SELECT path FROM files WHERE owner != 'other'", [][]any{{"/known"}}},
+		{"SELECT path FROM files WHERE uid >= 0", [][]any{{"/known"}, {"/unresolved"}}},
+		{"SELECT uid, owner FROM files WHERE path = '/unknown'", [][]any{{nil, nil}}},
+	} {
+		plan, err := Parse(tc.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := Execute(context.Background(), plan, files)
+		if err != nil || !reflect.DeepEqual(result.Rows, tc.want) {
+			t.Errorf("%s: got %#v, error %v; want %#v", tc.sql, result.Rows, err, tc.want)
+		}
+	}
+}
+
 func TestWildcardAndCancellation(t *testing.T) {
 	plan, err := Parse("SELECT * FROM files")
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := Execute(context.Background(), plan, map[string]catalog.File{"/a": {Path: "/a"}})
-	if err != nil || len(result.Columns) != 7 || len(result.Rows) != 1 {
+	if err != nil || len(result.Columns) != 9 || len(result.Rows) != 1 {
 		t.Fatalf("unexpected result: %#v, %v", result, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

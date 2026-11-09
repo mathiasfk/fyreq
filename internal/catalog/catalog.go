@@ -21,6 +21,10 @@ type File struct {
 	ModifiedAt time.Time `json:"modified_at"`
 	IndexedAt  time.Time `json:"indexed_at"`
 	Identity   string    `json:"identity,omitempty"`
+	// Nil ownership fields mean unavailable, including records collected before
+	// ownership support. UID zero is a valid owner and must remain distinguishable.
+	UID   *int64  `json:"uid"`
+	Owner *string `json:"owner"`
 }
 
 // Coverage describes the last attempt to scan a root. An incomplete attempt does

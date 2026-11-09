@@ -12,3 +12,11 @@ func identity(info fs.FileInfo) string {
 	}
 	return ""
 }
+
+func ownershipUID(info fs.FileInfo) *int64 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		uid := int64(stat.Uid)
+		return &uid
+	}
+	return nil
+}

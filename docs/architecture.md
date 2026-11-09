@@ -41,16 +41,20 @@ formats in the parser or terminal rendering in the executor.
 ## Catalog model
 
 Each path record contains an internal ID, absolute lexical path, basename, kind,
-size, modification time, observation time, and optional native identity. Kinds
+size, modification time, observation time, optional native identity, and nullable
+filesystem owner UID and account name. Kinds
 are `file`, `directory`, `symlink`, and `other`. Size is the OS-reported byte size;
 directory size is not a recursive total, and symlink metadata describes the link.
 
 The macOS adapter observes device and inode. Records retain their ID when
 reobserved at the same path with matching identity. A known replacement receives
 a new ID. Rename correlation and a normalized multi-path identity model remain
-future work. Birth times, ownership, permissions, and unavailable optional fields
-are not exposed in this first schema; future optional metadata must distinguish
-absence from zero.
+future work. macOS ownership comes from the entry's native metadata; account names
+are resolved best-effort and cached per scan, including failed lookups. Missing
+ownership fields in older version-1 snapshots remain unknown until refreshed.
+Numeric UID zero remains distinct from an unavailable UID. Birth times and
+permissions are not exposed yet; optional metadata must distinguish absence from
+zero.
 
 Coverage records the last scan attempt per requested root. It includes start and
 completion timestamps, completeness, error count, and bounded diagnostics. Roots

@@ -45,6 +45,7 @@ Collect a small directory first:
 ./bin/fyreq status
 ./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' LIMIT 20"
 ./bin/fyreq query "SELECT path FROM files WHERE size >= 1048576 AND kind = 'file'"
+./bin/fyreq query "SELECT path, uid, owner FROM files WHERE owner = 'root' LIMIT 20"
 ```
 
 To collect the accessible filesystem, omit the path:
@@ -78,6 +79,12 @@ records, retains all unobserved records, records diagnostics, and exits with cod
 1. This conservative policy can retain stale records until a complete scan of
 the relevant region succeeds. Up to 100 error messages are retained per root;
 the error count includes all collection errors.
+
+On macOS, collection includes the numeric filesystem owner (`uid`) and its
+best-effort account name (`owner`). Ownership is distinct from document authorship.
+Existing catalogs remain readable, but previously collected records return null
+ownership until refreshed. Unresolved account names are null even if the UID is
+known; numeric UID zero is a valid value. See the query language for null behavior.
 
 Ctrl-C requests cancellation. Cancellation detected before publication discards
 the pending changes; an already published generation remains committed. Queries continue to
