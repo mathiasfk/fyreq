@@ -2,7 +2,7 @@
 
 ## Scope
 
-fyreq is a modular monolith with a global, persistent filesystem metadata
+FyreQ is a modular monolith with a global, persistent filesystem metadata
 catalog. A requested root limits collection work, not the lifetime or identity
 of the catalog. Queries read persisted observations; they do not implicitly scan
 the live filesystem.

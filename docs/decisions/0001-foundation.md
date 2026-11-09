@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-fyreq needs a portable foundation for querying filesystem metadata, with macOS
+FyreQ needs a portable foundation for querying filesystem metadata, with macOS
 as its initial platform. Future work includes background indexing, process
 inspection, more operating systems, and a TUI. Storage and query mechanics must
 be implemented within the project rather than delegated to a database engine.

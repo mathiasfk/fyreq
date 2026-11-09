@@ -1,4 +1,4 @@
-# Working on fyreq
+# Working on FyreQ
 
 ## Language
 

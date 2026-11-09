@@ -1,6 +1,6 @@
-# fyreq
+# FyreQ
 
-fyreq is the foundation of a filesystem metadata catalog and query engine written
+FyreQ is the foundation of a filesystem metadata catalog and query engine written
 in Go. It maintains one persistent catalog, collects metadata without reading file
 contents, and exposes a small SQL-like language through a CLI.
 
