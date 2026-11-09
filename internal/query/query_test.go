@@ -59,10 +59,69 @@ func TestRejectInvalidQueries(t *testing.T) {
 		"SELECT * FROM files WHERE kind = 'file' OR size = 1",
 		"SELECT * FROM files WHERE uid = '0'", "SELECT * FROM files WHERE uid = -1",
 		"SELECT * FROM files WHERE owner = root", "SELECT * FROM files WHERE uid = 9223372036854775808",
+		"SELECT * FROM files ORDER", "SELECT * FROM files ORDER size",
+		"SELECT * FROM files ORDER BY", "SELECT * FROM files ORDER BY nope",
+		"SELECT * FROM files ORDER BY 'size'", "SELECT * FROM files ORDER BY size,",
+		"SELECT * FROM files ORDER BY size ASC DESC", "SELECT * FROM files ORDER BY size DOWN",
+		"SELECT * FROM files ORDER BY size NULLS FIRST", "SELECT * FROM files ORDER BY 1",
+		"SELECT * FROM files LIMIT 1 ORDER BY size", "SELECT * FROM files ORDER BY size WHERE size > 1",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			if _, err := Parse(sql); err == nil {
 				t.Fatal("expected parse error")
+			}
+		})
+	}
+}
+
+func TestOrderBy(t *testing.T) {
+	zero, high, low := int64(0), int64(100), int64(20)
+	alice, bob := "alice", "bob"
+	early := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	late := early.Add(time.Hour)
+	files := map[string]catalog.File{
+		"/a": {Path: "/a", Name: "z", Kind: "file", Size: 2, UID: &high, Owner: &bob, ModifiedAt: late, IndexedAt: early},
+		"/b": {Path: "/b", Name: "m", Kind: "file", Size: 10, UID: &zero, Owner: &alice, ModifiedAt: early, IndexedAt: late},
+		"/c": {Path: "/c", Name: "m", Kind: "file", Size: 10, UID: &low, Owner: &alice, ModifiedAt: early.In(time.FixedZone("offset", 3600)), IndexedAt: late},
+		"/d": {Path: "/d", Name: "a", Kind: "directory", Size: 100},
+		"/e": {Path: "/e", Name: "b", Kind: "file", Size: 3},
+	}
+	for _, tc := range []struct {
+		name, sql string
+		want      []string
+	}{
+		{"default", "SELECT path FROM files", []string{"/a", "/b", "/c", "/d", "/e"}},
+		{"implicit ascending", "SELECT path FROM files ORDER BY size", []string{"/a", "/e", "/b", "/c", "/d"}},
+		{"descending before limit", "SELECT path FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 2", []string{"/b", "/c"}},
+		{"multiple directions", "SELECT path FROM files ORDER BY size DESC, name ASC, path DESC", []string{"/d", "/c", "/b", "/e", "/a"}},
+		{"case insensitive", "select path from files order by NAME desc, PATH desc;", []string{"/a", "/c", "/b", "/e", "/d"}},
+		{"nullable ascending", "SELECT path FROM files ORDER BY uid ASC", []string{"/b", "/c", "/a", "/d", "/e"}},
+		{"nullable descending", "SELECT path FROM files ORDER BY uid DESC", []string{"/a", "/c", "/b", "/d", "/e"}},
+		{"null ties", "SELECT path FROM files ORDER BY owner, size DESC", []string{"/b", "/c", "/a", "/d", "/e"}},
+		{"nullable string descending", "SELECT path FROM files ORDER BY owner DESC", []string{"/a", "/b", "/c", "/d", "/e"}},
+		{"timestamp instants", "SELECT path FROM files WHERE kind = 'file' ORDER BY modified_at DESC", []string{"/a", "/b", "/c", "/e"}},
+		{"observation time", "SELECT path FROM files WHERE kind = 'file' ORDER BY indexed_at", []string{"/e", "/a", "/b", "/c"}},
+		{"zero limit", "SELECT path FROM files ORDER BY size DESC LIMIT 0", []string{}},
+		{"empty matches", "SELECT path FROM files WHERE size > 100 ORDER BY size", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := Parse(tc.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Repetition verifies that equal keys do not inherit map iteration order.
+			for range 5 {
+				result, err := Execute(context.Background(), plan, files)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := make([]string, 0, len(result.Rows))
+				for _, row := range result.Rows {
+					got = append(got, row[0].(string))
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
 			}
 		})
 	}

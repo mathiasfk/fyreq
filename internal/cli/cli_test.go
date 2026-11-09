@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"fyreq/internal/app"
@@ -51,6 +52,34 @@ func TestCLIIndexQueryRefresh(t *testing.T) {
 	}
 	run("status")
 	run("help")
+}
+
+func TestCLIOrderByBeforeLimit(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	for name, content := range map[string]string{"small": "a", "large": "abcde", "medium": "abc"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(dir string) app.App {
+		return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+	}
+	var out, diagnostics bytes.Buffer
+	ctx := context.Background()
+	if err := Run(ctx, []string{"index", root}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := Run(ctx, []string{"--json", "query", "SELECT name FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 2"}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	var result app.QueryResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]any{{"large"}, {"medium"}}; !reflect.DeepEqual(result.Rows, want) {
+		t.Fatalf("got %#v, want %#v", result.Rows, want)
+	}
 }
 
 func TestCLIReportsIncompleteScan(t *testing.T) {

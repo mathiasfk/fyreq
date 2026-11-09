@@ -3,6 +3,7 @@
 package query
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"sort"
@@ -23,10 +24,16 @@ type predicate struct {
 	value any
 }
 
+type ordering struct {
+	field      string
+	descending bool
+}
+
 // Plan is a validated query. Its private predicates cannot bypass type checking.
 type Plan struct {
 	columns    []string
 	predicates []predicate
+	order      []ordering
 	limit      int
 }
 
@@ -142,7 +149,8 @@ func (p *parser) field() (string, error) {
 }
 
 // Parse accepts SELECT fields FROM files [WHERE comparisons joined by AND]
-// [LIMIT n]. Keywords and fields are case-insensitive; string values are exact.
+// [ORDER BY field [ASC|DESC], ...] [LIMIT n]. Keywords and fields are
+// case-insensitive; string values are exact.
 func Parse(input string) (Plan, error) {
 	tokens, err := lex(input)
 	if err != nil {
@@ -216,6 +224,27 @@ func Parse(input string) (Plan, error) {
 			}
 		}
 	}
+	if p.accept("ORDER") {
+		if err := p.expect("BY"); err != nil {
+			return plan, err
+		}
+		for {
+			field, err := p.field()
+			if err != nil {
+				return plan, err
+			}
+			term := ordering{field: field}
+			if p.accept("DESC") {
+				term.descending = true
+			} else {
+				p.accept("ASC")
+			}
+			plan.order = append(plan.order, term)
+			if !p.accept(",") {
+				break
+			}
+		}
+	}
 	if p.accept("LIMIT") {
 		t, err := p.next()
 		if err != nil {
@@ -278,20 +307,7 @@ func matches(file catalog.File, p predicate) bool {
 	if got == nil {
 		return false
 	}
-	var comparison int
-	switch want := p.value.(type) {
-	case string:
-		comparison = strings.Compare(got.(string), want)
-	case int64:
-		number := got.(int64)
-		if number < want {
-			comparison = -1
-		} else if number > want {
-			comparison = 1
-		}
-	case time.Time:
-		comparison = got.(time.Time).Compare(want)
-	}
+	comparison := compareValues(got, p.value)
 	switch p.op {
 	case "=":
 		return comparison == 0
@@ -309,8 +325,23 @@ func matches(file catalog.File, p predicate) bool {
 	return false
 }
 
-// Execute uses a full scan with deterministic path ordering. It checks
-// cancellation between records; secondary indexes can replace this scan later.
+// compareValues compares non-null values of the same validated field type.
+func compareValues(a, b any) int {
+	switch a := a.(type) {
+	case string:
+		return strings.Compare(a, b.(string))
+	case int64:
+		return cmp.Compare(a, b.(int64))
+	case time.Time:
+		return a.Compare(b.(time.Time))
+	default:
+		panic("unvalidated query value type")
+	}
+}
+
+// Execute filters records, sorts matches, and applies the limit before projection.
+// Nulls sort last in both directions, with ascending path as the final tie-breaker.
+// Secondary indexes can replace this in-memory full scan later.
 func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Result, error) {
 	result := Result{Columns: append([]string(nil), plan.columns...), Rows: make([][]any, 0)}
 	if len(plan.columns) == 0 {
@@ -319,19 +350,14 @@ func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Res
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	paths := make([]string, 0, len(files))
-	for path := range files {
-		paths = append(paths, path)
+	if plan.limit == 0 {
+		return result, nil
 	}
-	sort.Strings(paths)
-	for _, path := range paths {
+	paths := make([]string, 0, len(files))
+	for path, file := range files {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if plan.limit >= 0 && len(result.Rows) >= plan.limit {
-			break
-		}
-		file := files[path]
 		match := true
 		for _, predicate := range plan.predicates {
 			if !matches(file, predicate) {
@@ -339,9 +365,44 @@ func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Res
 				break
 			}
 		}
-		if !match {
-			continue
+		if match {
+			paths = append(paths, path)
 		}
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		a, b := files[paths[i]], files[paths[j]]
+		for _, term := range plan.order {
+			av, bv := value(a, term.field), value(b, term.field)
+			if av == nil && bv == nil {
+				continue
+			}
+			if av == nil {
+				return false
+			}
+			if bv == nil {
+				return true
+			}
+			comparison := compareValues(av, bv)
+			if comparison != 0 {
+				if term.descending {
+					return comparison > 0
+				}
+				return comparison < 0
+			}
+		}
+		return paths[i] < paths[j]
+	})
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if plan.limit >= 0 && len(paths) > plan.limit {
+		paths = paths[:plan.limit]
+	}
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		file := files[path]
 		row := make([]any, len(plan.columns))
 		for j, column := range plan.columns {
 			row[j] = value(file, column)

@@ -32,8 +32,11 @@ receives records, not storage handles. OS-specific identity extraction is isolat
 in `identity_darwin.go`; other platforms have a portable fallback but are not
 supported or validated yet.
 
-The first query plan is a validated projection, conjunction of typed predicates,
-and optional limit. Execution scans records in deterministic lexical path order.
+The query plan is a validated projection, conjunction of typed predicates,
+optional ordering terms, and optional limit. Execution filters records, sorts
+matches by the requested fields, applies the limit, and projects columns. Nulls
+sort last in both directions. Ascending lexical path breaks ties and supplies
+the default order when no ordering terms are present.
 There is no cost-based optimizer or physical access-path selection yet. Future
 storage readers can expose iterators and secondary indexes without putting disk
 formats in the parser or terminal rendering in the executor.

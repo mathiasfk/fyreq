@@ -44,6 +44,7 @@ Collect a small directory first:
 ./bin/fyreq index "$HOME/Projects"
 ./bin/fyreq status
 ./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' LIMIT 20"
+./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 20"
 ./bin/fyreq query "SELECT path FROM files WHERE size >= 1048576 AND kind = 'file'"
 ./bin/fyreq query "SELECT path, uid, owner FROM files WHERE owner = 'root' LIMIT 20"
 ```
@@ -123,7 +124,7 @@ CLI flow from collection through querying and deletion.
 ## Current limits
 
 - The catalog is a versioned JSON snapshot loaded into memory. Queries perform a
-  full scan with path sorting; there are no secondary search indexes yet.
+  full scan with in-memory sorting; there are no secondary search indexes yet.
 - Every update rewrites the snapshot. This foundation is intended to validate
   boundaries and behavior before introducing scalable storage structures.
 - There is no daemon, periodic refresh, event watcher, live query fallback,

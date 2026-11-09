@@ -6,6 +6,7 @@ The initial language is a deliberately small SQL-like subset:
 SELECT (* | field [, field ...])
 FROM files
 [WHERE field operator literal [AND field operator literal ...]]
+[ORDER BY field [ASC | DESC] [, field [ASC | DESC] ...]]
 [LIMIT non_negative_integer]
 [;]
 ```
@@ -56,9 +57,25 @@ SELECT path, uid, owner FROM files WHERE owner = 'root'
 SELECT path FROM files WHERE uid = 0
 ```
 
-Results are ordered by absolute path before applying `LIMIT`. `LIMIT 0` produces
-an empty result with its projected columns. This deterministic ordering is the
-current execution behavior; explicit `ORDER BY` is not supported.
+## Ordering and limits
+
+`ORDER BY` accepts any query field, including fields omitted from `SELECT`.
+Each field defaults to `ASC` (ascending); use `DESC` for descending order. Multiple
+fields are evaluated left to right. Strings sort lexically and case-sensitively,
+integers sort numerically, and timestamps sort by instant. Unavailable values
+always sort last in both directions. `NULLS FIRST` and `NULLS LAST` syntax is not
+supported.
+
+```sql
+SELECT path, size FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 20
+SELECT path FROM files ORDER BY owner ASC, modified_at DESC
+```
+
+Filtering occurs before ordering, and `LIMIT` is applied after ordering. Absolute
+path ascending is the final tie-breaker and the default order when `ORDER BY` is
+omitted. `LIMIT 0` produces an empty result with its projected columns. Place
+`ORDER BY` after `WHERE` and before `LIMIT`. Expressions, aliases, and numeric
+column positions are not supported as ordering terms.
 
 Unknown fields, unknown relations, invalid literals, unsupported operators, and
 trailing statements produce errors. There is no `OR`, `LIKE`, glob matching,
