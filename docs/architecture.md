@@ -32,11 +32,16 @@ receives records, not storage handles. OS-specific identity extraction is isolat
 in `identity_darwin.go`; other platforms have a portable fallback but are not
 supported or validated yet.
 
-The query plan is a validated projection, conjunction of typed predicates,
-optional ordering terms, and optional limit. Execution filters records, sorts
-matches by the requested fields, applies the limit, and projects columns. Nulls
-sort last in both directions. Ascending lexical path breaks ties and supplies
-the default order when no ordering terms are present.
+The query plan contains validated field or aggregate selections, a conjunction
+of typed predicates, optional grouping keys, ordering terms, and a limit.
+Execution filters records, optionally groups and accumulates aggregates, sorts,
+applies the limit, and projects columns. Group state is held in memory, with one
+accumulator per distinct aggregate per group. Tuple keys encode boundaries and
+nulls explicitly; timestamp keys normalize to UTC. Integer sums use exact
+intermediate arithmetic and fail on signed 64-bit output overflow; averages use
+floating-point output. Nulls sort last in both directions. Ascending lexical
+path breaks ties for ordinary queries; ascending grouping tuples break ties for
+grouped queries. Those tie-breakers also supply the default order.
 There is no cost-based optimizer or physical access-path selection yet. Future
 storage readers can expose iterators and secondary indexes without putting disk
 formats in the parser or terminal rendering in the executor.

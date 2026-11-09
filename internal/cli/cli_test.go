@@ -97,3 +97,35 @@ func TestCLIReportsIncompleteScan(t *testing.T) {
 		t.Fatalf("incomplete scan was not persisted: %#v, %v", snapshot, err)
 	}
 }
+
+func TestCLIGroupBy(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	for name, content := range map[string]string{"a": "x", "b": "y", "c": "zzzz"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(dir string) app.App {
+		return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+	}
+	var out, diagnostics bytes.Buffer
+	ctx := context.Background()
+	if err := Run(ctx, []string{"index", root}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	sql := "SELECT size, COUNT(*), SUM(size) FROM files WHERE kind = 'file' GROUP BY size ORDER BY COUNT(*) DESC LIMIT 1"
+	if err := Run(ctx, []string{"--json", "query", sql}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	var result app.QueryResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]any{{float64(1), float64(2), float64(2)}}; !reflect.DeepEqual(result.Rows, want) {
+		t.Fatalf("got %#v, want %#v", result.Rows, want)
+	}
+	if !reflect.DeepEqual(result.Columns, []string{"size", "count(*)", "sum(size)"}) || result.Generation != 1 || len(result.Coverage) != 1 {
+		t.Fatalf("unexpected grouped result metadata: %#v", result)
+	}
+}

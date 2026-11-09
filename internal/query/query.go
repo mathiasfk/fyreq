@@ -25,14 +25,29 @@ type predicate struct {
 }
 
 type ordering struct {
-	field      string
+	expression expression
 	descending bool
+}
+
+type expression struct {
+	field     string
+	aggregate string
+}
+
+func (e expression) label() string {
+	if e.aggregate != "" {
+		return e.aggregate + "(" + e.field + ")"
+	}
+	return e.field
 }
 
 // Plan is a validated query. Its private predicates cannot bypass type checking.
 type Plan struct {
 	columns    []string
+	selections []expression
 	predicates []predicate
+	groupBy    []string
+	grouped    bool
 	order      []ordering
 	limit      int
 }
@@ -79,7 +94,7 @@ func lex(input string) ([]token, error) {
 			tokens = append(tokens, token{text: value.String(), quoted: true})
 			continue
 		}
-		if strings.ContainsRune(",*;=<>!", r) {
+		if strings.ContainsRune(",*;=<>!()", r) {
 			end := n
 			if len(input) > n && input[n] == '=' && strings.ContainsRune("<>!", r) {
 				end++
@@ -91,7 +106,7 @@ func lex(input string) ([]token, error) {
 		end := 0
 		for end < len(input) {
 			ch, width := utf8.DecodeRuneInString(input[end:])
-			if unicode.IsSpace(ch) || strings.ContainsRune(",*;=<>!'", ch) {
+			if unicode.IsSpace(ch) || strings.ContainsRune(",*;=<>!'()", ch) {
 				break
 			}
 			end += width
@@ -148,8 +163,41 @@ func (p *parser) field() (string, error) {
 	return "", fmt.Errorf("unknown field %q", t.text)
 }
 
-// Parse accepts SELECT fields FROM files [WHERE comparisons joined by AND]
-// [ORDER BY field [ASC|DESC], ...] [LIMIT n]. Keywords and fields are
+func (p *parser) expression() (expression, error) {
+	if p.pos+1 < len(p.tokens) && !p.tokens[p.pos].quoted &&
+		!p.tokens[p.pos+1].quoted && p.tokens[p.pos+1].text == "(" {
+		function := strings.ToLower(p.tokens[p.pos].text)
+		switch function {
+		case "count", "sum", "avg", "min", "max":
+		default:
+			return expression{}, fmt.Errorf("unsupported aggregate %q", function)
+		}
+		p.pos += 2
+		field := "*"
+		if !p.accept("*") {
+			var err error
+			field, err = p.field()
+			if err != nil {
+				return expression{}, err
+			}
+		}
+		if err := p.expect(")"); err != nil {
+			return expression{}, err
+		}
+		if field == "*" && function != "count" {
+			return expression{}, fmt.Errorf("only COUNT accepts *")
+		}
+		if (function == "sum" || function == "avg") && field != "size" && field != "uid" {
+			return expression{}, fmt.Errorf("%s requires a numeric field", strings.ToUpper(function))
+		}
+		return expression{field: field, aggregate: function}, nil
+	}
+	field, err := p.field()
+	return expression{field: field}, err
+}
+
+// Parse accepts SELECT fields or aggregates FROM files, optional WHERE,
+// GROUP BY, ORDER BY, and LIMIT clauses in that order. Keywords and fields are
 // case-insensitive; string values are exact.
 func Parse(input string) (Plan, error) {
 	tokens, err := lex(input)
@@ -162,14 +210,16 @@ func Parse(input string) (Plan, error) {
 		return plan, err
 	}
 	if p.accept("*") {
-		plan.columns = append([]string(nil), fields...)
+		for _, field := range fields {
+			plan.selections = append(plan.selections, expression{field: field})
+		}
 	} else {
 		for {
-			field, err := p.field()
+			expr, err := p.expression()
 			if err != nil {
 				return plan, err
 			}
-			plan.columns = append(plan.columns, field)
+			plan.selections = append(plan.selections, expr)
 			if !p.accept(",") {
 				break
 			}
@@ -224,7 +274,7 @@ func Parse(input string) (Plan, error) {
 			}
 		}
 	}
-	if p.accept("ORDER") {
+	if p.accept("GROUP") {
 		if err := p.expect("BY"); err != nil {
 			return plan, err
 		}
@@ -233,7 +283,22 @@ func Parse(input string) (Plan, error) {
 			if err != nil {
 				return plan, err
 			}
-			term := ordering{field: field}
+			plan.groupBy = append(plan.groupBy, field)
+			if !p.accept(",") {
+				break
+			}
+		}
+	}
+	if p.accept("ORDER") {
+		if err := p.expect("BY"); err != nil {
+			return plan, err
+		}
+		for {
+			expr, err := p.expression()
+			if err != nil {
+				return plan, err
+			}
+			term := ordering{expression: expr}
 			if p.accept("DESC") {
 				term.descending = true
 			} else {
@@ -259,6 +324,36 @@ func Parse(input string) (Plan, error) {
 	p.accept(";")
 	if p.pos != len(p.tokens) {
 		return plan, fmt.Errorf("unexpected token %q", p.tokens[p.pos].text)
+	}
+	for _, selection := range plan.selections {
+		plan.columns = append(plan.columns, selection.label())
+		plan.grouped = plan.grouped || selection.aggregate != ""
+	}
+	for _, term := range plan.order {
+		plan.grouped = plan.grouped || term.expression.aggregate != ""
+	}
+	plan.grouped = plan.grouped || len(plan.groupBy) > 0
+	if plan.grouped {
+		groupFields := make(map[string]bool)
+		for _, field := range plan.groupBy {
+			groupFields[field] = true
+		}
+		validate := func(expr expression) error {
+			if expr.aggregate == "" && !groupFields[expr.field] {
+				return fmt.Errorf("field %q must appear in GROUP BY or an aggregate", expr.field)
+			}
+			return nil
+		}
+		for _, selection := range plan.selections {
+			if err := validate(selection); err != nil {
+				return plan, err
+			}
+		}
+		for _, term := range plan.order {
+			if err := validate(term.expression); err != nil {
+				return plan, err
+			}
+		}
 	}
 	return plan, nil
 }
@@ -332,6 +427,8 @@ func compareValues(a, b any) int {
 		return strings.Compare(a, b.(string))
 	case int64:
 		return cmp.Compare(a, b.(int64))
+	case float64:
+		return cmp.Compare(a, b.(float64))
 	case time.Time:
 		return a.Compare(b.(time.Time))
 	default:
@@ -353,6 +450,9 @@ func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Res
 	if plan.limit == 0 {
 		return result, nil
 	}
+	if plan.grouped {
+		return executeGrouped(ctx, plan, files)
+	}
 	paths := make([]string, 0, len(files))
 	for path, file := range files {
 		if err := ctx.Err(); err != nil {
@@ -372,21 +472,8 @@ func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Res
 	sort.Slice(paths, func(i, j int) bool {
 		a, b := files[paths[i]], files[paths[j]]
 		for _, term := range plan.order {
-			av, bv := value(a, term.field), value(b, term.field)
-			if av == nil && bv == nil {
-				continue
-			}
-			if av == nil {
-				return false
-			}
-			if bv == nil {
-				return true
-			}
-			comparison := compareValues(av, bv)
-			if comparison != 0 {
-				if term.descending {
-					return comparison > 0
-				}
+			av, bv := value(a, term.expression.field), value(b, term.expression.field)
+			if comparison := compareOrdered(av, bv, term.descending); comparison != 0 {
 				return comparison < 0
 			}
 		}

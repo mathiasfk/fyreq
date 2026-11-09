@@ -47,6 +47,8 @@ Collect a small directory first:
 ./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 20"
 ./bin/fyreq query "SELECT path FROM files WHERE size >= 1048576 AND kind = 'file'"
 ./bin/fyreq query "SELECT path, uid, owner FROM files WHERE owner = 'root' LIMIT 20"
+./bin/fyreq query "SELECT kind, COUNT(*) FROM files GROUP BY kind"
+./bin/fyreq query "SELECT owner, SUM(size) FROM files WHERE kind = 'file' GROUP BY owner ORDER BY SUM(size) DESC LIMIT 10"
 ```
 
 To collect the accessible filesystem, omit the path:
