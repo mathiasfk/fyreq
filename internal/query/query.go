@@ -45,7 +45,7 @@ func (e expression) label() string {
 type Plan struct {
 	columns    []string
 	selections []expression
-	predicates []predicate
+	filter     *condition
 	groupBy    []string
 	grouped    bool
 	order      []ordering
@@ -196,6 +196,65 @@ func (p *parser) expression() (expression, error) {
 	return expression{field: field}, err
 }
 
+func (p *parser) disjunction() (*condition, error) {
+	left, err := p.conjunction()
+	for err == nil && p.accept("OR") {
+		var right *condition
+		right, err = p.conjunction()
+		left = &condition{op: "OR", left: left, right: right}
+	}
+	return left, err
+}
+
+func (p *parser) conjunction() (*condition, error) {
+	left, err := p.comparison()
+	for err == nil && p.accept("AND") {
+		var right *condition
+		right, err = p.comparison()
+		left = &condition{op: "AND", left: left, right: right}
+	}
+	return left, err
+}
+
+func (p *parser) comparison() (*condition, error) {
+	field, err := p.field()
+	if err != nil {
+		return nil, err
+	}
+	op, err := p.next()
+	if err != nil {
+		return nil, err
+	}
+	if op.quoted || !validOperator(op.text) {
+		return nil, fmt.Errorf("unsupported comparison %q", op.text)
+	}
+	literal, err := p.next()
+	if err != nil {
+		return nil, err
+	}
+	var value any
+	switch field {
+	case "size", "uid":
+		v, err := strconv.ParseInt(literal.text, 10, 64)
+		if err != nil || literal.quoted || v < 0 {
+			return nil, fmt.Errorf("%s requires a non-negative integer", field)
+		}
+		value = v
+	case "modified_at", "indexed_at":
+		v, err := time.Parse(time.RFC3339Nano, literal.text)
+		if err != nil || !literal.quoted {
+			return nil, fmt.Errorf("%s requires a quoted RFC 3339 timestamp", field)
+		}
+		value = v
+	default:
+		if !literal.quoted {
+			return nil, fmt.Errorf("%s requires a single-quoted string", field)
+		}
+		value = literal.text
+	}
+	return &condition{predicate: predicate{field: field, op: op.text, value: value}}, nil
+}
+
 // Parse accepts SELECT fields or aggregates FROM files, optional WHERE,
 // GROUP BY, ORDER BY, and LIMIT clauses in that order. Keywords and fields are
 // case-insensitive; string values are exact.
@@ -232,48 +291,12 @@ func Parse(input string) (Plan, error) {
 		return plan, err
 	}
 	if p.accept("WHERE") {
-		for {
-			field, err := p.field()
-			if err != nil {
-				return plan, err
-			}
-			op, err := p.next()
-			if err != nil {
-				return plan, err
-			}
-			if op.quoted || !validOperator(op.text) {
-				return plan, fmt.Errorf("unsupported comparison %q", op.text)
-			}
-			literal, err := p.next()
-			if err != nil {
-				return plan, err
-			}
-			var value any
-			switch field {
-			case "size", "uid":
-				v, err := strconv.ParseInt(literal.text, 10, 64)
-				if err != nil || literal.quoted || v < 0 {
-					return plan, fmt.Errorf("%s requires a non-negative integer", field)
-				}
-				value = v
-			case "modified_at", "indexed_at":
-				v, err := time.Parse(time.RFC3339Nano, literal.text)
-				if err != nil || !literal.quoted {
-					return plan, fmt.Errorf("%s requires a quoted RFC 3339 timestamp", field)
-				}
-				value = v
-			default:
-				if !literal.quoted {
-					return plan, fmt.Errorf("%s requires a single-quoted string", field)
-				}
-				value = literal.text
-			}
-			plan.predicates = append(plan.predicates, predicate{field: field, op: op.text, value: value})
-			if !p.accept("AND") {
-				break
-			}
+		plan.filter, err = p.disjunction()
+		if err != nil {
+			return plan, err
 		}
 	}
+
 	if p.accept("GROUP") {
 		if err := p.expect("BY"); err != nil {
 			return plan, err
@@ -396,28 +419,28 @@ func value(file catalog.File, field string) any {
 	panic("unvalidated query field")
 }
 
-func matches(file catalog.File, p predicate) bool {
+func matches(file catalog.File, p predicate) truth {
 	got := value(file, p.field)
-	// Unavailable metadata never satisfies a comparison, including inequality.
+	// Comparisons with unavailable metadata are unknown.
 	if got == nil {
-		return false
+		return truthUnknown
 	}
 	comparison := compareValues(got, p.value)
 	switch p.op {
 	case "=":
-		return comparison == 0
+		return truthFromBool(comparison == 0)
 	case "!=":
-		return comparison != 0
+		return truthFromBool(comparison != 0)
 	case "<":
-		return comparison < 0
+		return truthFromBool(comparison < 0)
 	case "<=":
-		return comparison <= 0
+		return truthFromBool(comparison <= 0)
 	case ">":
-		return comparison > 0
+		return truthFromBool(comparison > 0)
 	case ">=":
-		return comparison >= 0
+		return truthFromBool(comparison >= 0)
 	}
-	return false
+	return truthFalse
 }
 
 // compareValues compares non-null values of the same validated field type.
@@ -458,14 +481,7 @@ func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Res
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		match := true
-		for _, predicate := range plan.predicates {
-			if !matches(file, predicate) {
-				match = false
-				break
-			}
-		}
-		if match {
+		if plan.filter.evaluate(file) == truthTrue {
 			paths = append(paths, path)
 		}
 	}

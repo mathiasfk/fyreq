@@ -5,12 +5,14 @@ The initial language is a deliberately small SQL-like subset:
 ```text
 SELECT (* | selection [, selection ...])
 FROM files
-[WHERE field operator literal [AND field operator literal ...]]
+[WHERE condition]
 [GROUP BY field [, field ...]]
 [ORDER BY selection [ASC | DESC] [, selection [ASC | DESC] ...]]
 [LIMIT non_negative_integer]
 [;]
 
+condition = conjunction [OR conjunction ...]
+conjunction = field operator literal [AND field operator literal ...]
 selection = field | COUNT(*) | aggregate(field)
 aggregate = COUNT | SUM | AVG | MIN | MAX
 ```
@@ -59,6 +61,14 @@ SELECT path, modified_at FROM files WHERE modified_at >= '2026-01-01T00:00:00Z'
 SELECT path FROM files WHERE path = '/Users/example/Projects/app/main.go'
 SELECT path, uid, owner FROM files WHERE owner = 'root'
 SELECT path FROM files WHERE uid = 0
+```
+
+`AND` has higher precedence than `OR`. Comparisons with null values are
+unknown; `WHERE` includes only true results. True OR unknown is true, while
+false OR unknown remains unknown.
+
+```sql
+SELECT path FROM files WHERE owner = 'root' OR kind = 'directory'
 ```
 
 ## Grouping and aggregates
@@ -128,7 +138,7 @@ after `GROUP BY` (or `WHERE` when not grouped) and before `LIMIT`. Arithmetic
 expressions, aliases, and numeric column positions are not ordering terms.
 
 Unknown fields, unknown relations, invalid literals, unsupported operators, and
-trailing statements produce errors. There is no `OR`, `LIKE`, glob matching,
+trailing statements produce errors. There is no `LIKE`, glob matching,
 path-descendant operator, arithmetic, joins, aliases, or live
 filesystem access yet.
 

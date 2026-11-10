@@ -128,16 +128,10 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		match := true
-		for _, predicate := range plan.predicates {
-			if !matches(file, predicate) {
-				match = false
-				break
-			}
-		}
-		if !match {
+		if plan.filter.evaluate(file) != truthTrue {
 			continue
 		}
+
 		keys := make([]any, len(plan.groupBy))
 		for i, field := range plan.groupBy {
 			keys[i] = canonicalValue(value(file, field))

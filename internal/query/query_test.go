@@ -56,7 +56,6 @@ func TestRejectInvalidQueries(t *testing.T) {
 		"SELECT * FROM files WHERE modified_at = 'yesterday'",
 		"SELECT * FROM files WHERE size >", "SELECT * FROM files WHERE size > 1 AND",
 		"SELECT * FROM files; SELECT * FROM files", "SELECT 'path' FROM files",
-		"SELECT * FROM files WHERE kind = 'file' OR size = 1",
 		"SELECT * FROM files WHERE uid = '0'", "SELECT * FROM files WHERE uid = -1",
 		"SELECT * FROM files WHERE owner = root", "SELECT * FROM files WHERE uid = 9223372036854775808",
 		"SELECT * FROM files ORDER", "SELECT * FROM files ORDER size",
