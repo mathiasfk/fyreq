@@ -13,7 +13,8 @@ FROM files
 
 condition = conjunction [OR conjunction ...]
 conjunction = condition_term [AND condition_term ...]
-condition_term = NOT condition_term | (condition) | field operator literal
+condition_term = NOT condition_term | (condition) | predicate
+predicate = field operator literal | field IS [NOT] NULL
 selection = field | COUNT(*) | aggregate(field)
 aggregate = COUNT | SUM | AVG | MIN | MAX
 ```
@@ -46,7 +47,9 @@ even when the numeric UID is known. Ownership of symlinks describes the link.
 Older catalogs remain readable: records without these optional fields return
 `null` until refreshed. Unsupported platforms also leave ownership unavailable.
 Unavailable values appear as `null` in JSON and `NULL` in text output. They never
-satisfy a comparison, including `!=`. `IS NULL` is not supported yet.
+satisfy a comparison, including `!=`. Use `IS NULL` or `IS NOT NULL` to test
+availability. These predicates always return true or false; zero and empty
+strings are not null. Null tests are accepted for every field.
 
 ## Comparisons
 
@@ -62,6 +65,8 @@ SELECT path, modified_at FROM files WHERE modified_at >= '2026-01-01T00:00:00Z'
 SELECT path FROM files WHERE path = '/Users/example/Projects/app/main.go'
 SELECT path, uid, owner FROM files WHERE owner = 'root'
 SELECT path FROM files WHERE uid = 0
+SELECT path FROM files WHERE owner IS NULL
+SELECT path FROM files WHERE uid IS NOT NULL AND owner IS NULL
 ```
 
 `NOT` has higher precedence than `AND`, which has higher precedence than `OR`.

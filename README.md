@@ -87,7 +87,14 @@ On macOS, collection includes the numeric filesystem owner (`uid`) and its
 best-effort account name (`owner`). Ownership is distinct from document authorship.
 Existing catalogs remain readable, but previously collected records return null
 ownership until refreshed. Unresolved account names are null even if the UID is
-known; numeric UID zero is a valid value. See the query language for null behavior.
+known; numeric UID zero is a valid value. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
+
+```sh
+./bin/fyreq query "SELECT path, uid FROM files WHERE owner IS NULL"
+./bin/fyreq query "SELECT path FROM files WHERE uid IS NOT NULL AND owner IS NULL"
+```
+
+See the query language for null behavior.
 
 Ctrl-C requests cancellation. Cancellation detected before publication discards
 the pending changes; an already published generation remains committed. Queries continue to

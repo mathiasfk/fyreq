@@ -246,6 +246,17 @@ func (p *parser) comparison() (*condition, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.accept("IS") {
+		op := "IS NULL"
+		if p.accept("NOT") {
+			op = "IS NOT NULL"
+		}
+		if err := p.expect("NULL"); err != nil {
+			return nil, err
+		}
+		return &condition{predicate: predicate{field: field, op: op}}, nil
+	}
+
 	op, err := p.next()
 	if err != nil {
 		return nil, err
@@ -446,6 +457,13 @@ func value(file catalog.File, field string) any {
 
 func matches(file catalog.File, p predicate) truth {
 	got := value(file, p.field)
+	if p.op == "IS NULL" {
+		return truthFromBool(got == nil)
+	}
+	if p.op == "IS NOT NULL" {
+		return truthFromBool(got != nil)
+	}
+
 	// Comparisons with unavailable metadata are unknown.
 	if got == nil {
 		return truthUnknown

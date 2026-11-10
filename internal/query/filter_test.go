@@ -75,3 +75,24 @@ func TestNotAndParentheses(t *testing.T) {
 	checkFilter(t, "not (size = 20 or (size = 30 and kind = 'directory'))", []string{"/a"})
 	rejectFilters(t, "NOT", "()", "(size = 10", "size = 10)", "(size = 10 OR)", "NOT AND size = 10", strings.Repeat("NOT ", 129)+"size = 10", strings.Repeat("(", 129)+"size = 10"+strings.Repeat(")", 129))
 }
+
+func TestNullPredicates(t *testing.T) {
+	checkFilter(t, "owner IS NULL", []string{"/b", "/c"})
+	checkFilter(t, "owner IS NOT NULL", []string{"/a"})
+	checkFilter(t, "uid IS NULL", []string{"/a", "/b", "/c"})
+	checkFilter(t, "uid IS NOT NULL", []string{})
+	checkFilter(t, "name IS NULL OR size IS NULL OR modified_at IS NULL", []string{})
+	checkFilter(t, "path is not null AND NOT (owner IS NOT NULL)", []string{"/b", "/c"})
+	checkFilter(t, "owner IS NULL AND size = 20 OR owner IS NOT NULL", []string{"/a", "/b"})
+	rejectFilters(t, "owner IS", "owner IS NOT", "owner IS 'NULL'", "owner IS NOT 'NULL'", "owner IS TRUE", "owner = NULL", "nope IS NULL", "owner IS NULL NULL")
+	zero, empty := int64(0), ""
+	files := map[string]catalog.File{"/a": {Path: "/a", UID: &zero, Owner: &empty}}
+	plan, err := Parse("SELECT path FROM files WHERE uid IS NOT NULL AND owner IS NOT NULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Execute(context.Background(), plan, files)
+	if err != nil || len(result.Rows) != 1 {
+		t.Fatalf("zero and empty string are not null: %#v, %v", result, err)
+	}
+}
