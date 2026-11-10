@@ -51,7 +51,7 @@ func TestRejectInvalidQueries(t *testing.T) {
 		"SELECT * FROM files WHERE size = '10'", "SELECT * FROM files WHERE size = -1",
 		"SELECT * FROM files WHERE size = 9223372036854775808",
 		"SELECT * FROM files WHERE name = unquoted", "SELECT * FROM files WHERE name = 'unfinished",
-		"SELECT * FROM files WHERE kind LIKE 'file'", "SELECT * FROM files LIMIT -1",
+		"SELECT * FROM files LIMIT -1",
 		"SELECT * FROM files LIMIT '1'", "SELECT * FROM files LIMIT",
 		"SELECT * FROM files WHERE modified_at = 'yesterday'",
 		"SELECT * FROM files WHERE size >", "SELECT * FROM files WHERE size > 1 AND",

@@ -129,3 +129,40 @@ func TestCLIGroupBy(t *testing.T) {
 		t.Fatalf("unexpected grouped result metadata: %#v", result)
 	}
 }
+
+func TestCLIBooleanPatternFilters(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	for _, name := range []string{"main.go", "main_test.go", "README.md", "notes.txt", "report_%.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(dir string) app.App {
+		return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+	}
+	var out, diagnostics bytes.Buffer
+	ctx := context.Background()
+	if err := Run(ctx, []string{"index", root}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		sql  string
+		want [][]any
+	}{
+		{"SELECT name FROM files WHERE (name LIKE '%.go' OR name LIKE '%.md') AND NOT (name LIKE '%_test.go') AND path IS NOT NULL AND name NOT LIKE 'notes%' ORDER BY name", [][]any{{"README.md"}, {"main.go"}}},
+		{"SELECT name FROM files WHERE name LIKE 'report!_!%.txt' ESCAPE '!'", [][]any{{"report_%.txt"}}},
+		{"SELECT kind, COUNT(*) FROM files WHERE NOT (name NOT LIKE '%.go') GROUP BY kind", [][]any{{"file", float64(2)}}},
+	} {
+		out.Reset()
+		if err := Run(ctx, []string{"--json", "query", tc.sql}, data, build, &out, &diagnostics); err != nil {
+			t.Fatal(err)
+		}
+		var result app.QueryResult
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(result.Rows, tc.want) || result.Generation != 1 || len(result.Coverage) != 1 {
+			t.Fatalf("%s: unexpected result %#v", tc.sql, result)
+		}
+	}
+}

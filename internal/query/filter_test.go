@@ -96,3 +96,16 @@ func TestNullPredicates(t *testing.T) {
 		t.Fatalf("zero and empty string are not null: %#v, %v", result, err)
 	}
 }
+
+func TestLikeFilters(t *testing.T) {
+	checkFilter(t, "name LIKE '%.go' OR name LIKE '%.md'", []string{"/a", "/b"})
+	checkFilter(t, "name NOT LIKE '%.go' AND kind = 'file'", []string{"/b"})
+	checkFilter(t, "NOT (name LIKE '%.md' OR kind = 'directory')", []string{"/a"})
+	checkFilter(t, "owner LIKE 'r%'", []string{"/a"})
+	checkFilter(t, "owner NOT LIKE 'other%'", []string{"/a"})
+	checkFilter(t, "owner NOT LIKE '%' OR owner IS NULL", []string{"/b", "/c"})
+	checkFilter(t, "name LIKE 'main§.go' ESCAPE '§'", []string{"/a"})
+	checkFilter(t, "name NOT LIKE 'main!.go' ESCAPE '!'", []string{"/b", "/c"})
+	checkFilter(t, "name like 'MAIN%'", []string{})
+	rejectFilters(t, "size LIKE '1%'", "uid NOT LIKE '%'", "modified_at LIKE '%'", "indexed_at LIKE '%'", "name LIKE", "name NOT LIKE", "name NOT = 'x'", "name LIKE 1", "name LIKE '\xff'", "name LIKE '%' ESCAPE", "name LIKE '%' ESCAPE ''", "name LIKE '%' ESCAPE 'ab'", "name LIKE '%' ESCAPE 1", "name LIKE 'abc!' ESCAPE '!'", "name LIKE '%' ESCAPE '\xff'")
+}

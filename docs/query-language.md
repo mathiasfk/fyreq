@@ -15,6 +15,7 @@ condition = conjunction [OR conjunction ...]
 conjunction = condition_term [AND condition_term ...]
 condition_term = NOT condition_term | (condition) | predicate
 predicate = field operator literal | field IS [NOT] NULL
+          | field [NOT] LIKE string [ESCAPE single_character_string]
 selection = field | COUNT(*) | aggregate(field)
 aggregate = COUNT | SUM | AVG | MIN | MAX
 ```
@@ -79,6 +80,31 @@ false OR unknown remains unknown.
 SELECT path FROM files WHERE owner = 'root' OR kind = 'directory'
 SELECT path FROM files WHERE NOT (kind = 'directory' OR size = 0)
 ```
+
+## Pattern matching
+
+`LIKE` matches an entire string, case-sensitively. `%` matches zero or more
+Unicode characters, and `_` matches exactly one Unicode character, including
+newlines. All other characters are literal, including regular expression
+punctuation. LIKE patterns must be valid UTF-8. Only string fields support LIKE.
+
+Backslashes remain literal by default. An optional `ESCAPE` clause specifies
+exactly one Unicode character; it makes the following pattern character literal,
+including `%`, `_`, and the escape character itself. A trailing escape is an error.
+`NOT LIKE` negates the match; unavailable values remain unknown and are excluded
+unless another condition makes the overall filter true.
+
+```sql
+SELECT path FROM files WHERE name LIKE '%.go' OR name LIKE '%.md'
+SELECT path FROM files WHERE name NOT LIKE 'test_%'
+SELECT path FROM files WHERE name LIKE 'report!_!%.txt' ESCAPE '!'
+```
+
+Patterns are compiled once per query using the standard library's regular
+expression engine, with literals escaped and no exponential backtracking.
+LIKE does not apply filesystem path-component rules: `%` can match `/`, and
+`path LIKE '/tmp/app%'` can also match `/tmp/application`. It is not a
+path-descendant operator.
 
 ## Grouping and aggregates
 
@@ -147,7 +173,7 @@ after `GROUP BY` (or `WHERE` when not grouped) and before `LIMIT`. Arithmetic
 expressions, aliases, and numeric column positions are not ordering terms.
 
 Unknown fields, unknown relations, invalid literals, unsupported operators, and
-trailing statements produce errors. There is no `LIKE`, glob matching,
+trailing statements produce errors. There is no glob matching,
 path-descendant operator, arithmetic, joins, aliases, or live
 filesystem access yet.
 

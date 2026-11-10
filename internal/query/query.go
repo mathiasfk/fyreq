@@ -257,6 +257,16 @@ func (p *parser) comparison() (*condition, error) {
 		return &condition{predicate: predicate{field: field, op: op}}, nil
 	}
 
+	if p.accept("LIKE") {
+		return p.like(field, false)
+	}
+	if p.accept("NOT") {
+		if err := p.expect("LIKE"); err != nil {
+			return nil, err
+		}
+		return p.like(field, true)
+	}
+
 	op, err := p.next()
 	if err != nil {
 		return nil, err
@@ -468,6 +478,10 @@ func matches(file catalog.File, p predicate) truth {
 	if got == nil {
 		return truthUnknown
 	}
+	if p.op == "LIKE" {
+		return truthFromBool(p.value.(*likePattern).matches(got.(string)))
+	}
+
 	comparison := compareValues(got, p.value)
 	switch p.op {
 	case "=":

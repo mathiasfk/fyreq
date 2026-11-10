@@ -111,6 +111,15 @@ Parentheses override precedence:
 ./bin/fyreq query "SELECT path FROM files WHERE NOT (kind = 'directory' OR size = 0)"
 ```
 
+Use `LIKE` and `NOT LIKE` for case-sensitive string patterns (`%` for zero or
+more characters, `_` for one). `ESCAPE` makes wildcard characters literal:
+
+```sh
+./bin/fyreq query "SELECT path FROM files WHERE name LIKE '%.go' OR name LIKE '%.md'"
+./bin/fyreq query "SELECT path FROM files WHERE kind = 'file' AND name NOT LIKE 'test_%'"
+./bin/fyreq query "SELECT path FROM files WHERE name LIKE 'report!_!%.txt' ESCAPE '!'"
+```
+
 ## Commands
 
 | Command | Behavior |
