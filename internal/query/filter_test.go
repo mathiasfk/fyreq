@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"fyreq/internal/catalog"
@@ -61,4 +62,16 @@ func TestOr(t *testing.T) {
 	checkFilter(t, "owner = 'other' OR size = 99", []string{})
 	checkFilter(t, "size = 10 or size = 10 OR size = 20", []string{"/a", "/b"})
 	rejectFilters(t, "OR size = 1", "size = 1 OR", "size = 1 OR OR size = 2", "size = 1 OR nope = 2")
+}
+
+func TestNotAndParentheses(t *testing.T) {
+	checkFilter(t, "(size = 10 OR size = 20) AND kind = 'directory'", []string{})
+	checkFilter(t, "NOT kind = 'directory' AND size >= 20", []string{"/b"})
+	checkFilter(t, "NOT (kind = 'directory' OR size = 20)", []string{"/a"})
+	checkFilter(t, "NOT NOT (size = 10)", []string{"/a"})
+	checkFilter(t, "NOT owner = 'other'", []string{"/a"})
+	checkFilter(t, "NOT (owner = 'other' AND size = 10)", []string{"/a", "/b", "/c"})
+	checkFilter(t, "NOT (owner = 'other' OR size = 10)", []string{})
+	checkFilter(t, "not (size = 20 or (size = 30 and kind = 'directory'))", []string{"/a"})
+	rejectFilters(t, "NOT", "()", "(size = 10", "size = 10)", "(size = 10 OR)", "NOT AND size = 10", strings.Repeat("NOT ", 129)+"size = 10", strings.Repeat("(", 129)+"size = 10"+strings.Repeat(")", 129))
 }

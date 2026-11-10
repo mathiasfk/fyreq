@@ -96,10 +96,12 @@ attempt for each requested root, including timestamps and completeness. A child
 refresh does not refresh its parent's timestamp. A completed traversal is an
 observation over time, not an atomic filesystem snapshot.
 
-Boolean filters support `AND` and `OR`, with `AND` evaluated first:
+Boolean filters support `NOT`, `AND`, and `OR`, in that precedence order.
+Parentheses override precedence:
 
 ```sh
 ./bin/fyreq query "SELECT path FROM files WHERE owner = 'root' OR kind = 'directory'"
+./bin/fyreq query "SELECT path FROM files WHERE NOT (kind = 'directory' OR size = 0)"
 ```
 
 ## Commands

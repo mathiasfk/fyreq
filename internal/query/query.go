@@ -123,6 +123,7 @@ func lex(input string) ([]token, error) {
 type parser struct {
 	tokens []token
 	pos    int
+	depth  int
 }
 
 func (p *parser) accept(s string) bool {
@@ -207,13 +208,37 @@ func (p *parser) disjunction() (*condition, error) {
 }
 
 func (p *parser) conjunction() (*condition, error) {
-	left, err := p.comparison()
+	left, err := p.unary()
 	for err == nil && p.accept("AND") {
 		var right *condition
-		right, err = p.comparison()
+		right, err = p.unary()
 		left = &condition{op: "AND", left: left, right: right}
 	}
 	return left, err
+}
+
+// Bound recursive syntax to reject pathological nesting before exhausting the stack.
+func (p *parser) unary() (*condition, error) {
+	if p.depth >= 128 {
+		return nil, fmt.Errorf("condition nesting exceeds 128 levels")
+	}
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.accept("NOT") {
+		child, err := p.unary()
+		return &condition{op: "NOT", left: child}, err
+	}
+	if p.accept("(") {
+		child, err := p.disjunction()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expect(")"); err != nil {
+			return nil, err
+		}
+		return child, nil
+	}
+	return p.comparison()
 }
 
 func (p *parser) comparison() (*condition, error) {

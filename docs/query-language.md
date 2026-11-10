@@ -12,7 +12,8 @@ FROM files
 [;]
 
 condition = conjunction [OR conjunction ...]
-conjunction = field operator literal [AND field operator literal ...]
+conjunction = condition_term [AND condition_term ...]
+condition_term = NOT condition_term | (condition) | field operator literal
 selection = field | COUNT(*) | aggregate(field)
 aggregate = COUNT | SUM | AVG | MIN | MAX
 ```
@@ -63,12 +64,15 @@ SELECT path, uid, owner FROM files WHERE owner = 'root'
 SELECT path FROM files WHERE uid = 0
 ```
 
-`AND` has higher precedence than `OR`. Comparisons with null values are
+`NOT` has higher precedence than `AND`, which has higher precedence than `OR`.
+Parentheses override precedence. Negating unknown remains unknown. Recursive
+condition nesting is limited to 128 levels. Comparisons with null values are
 unknown; `WHERE` includes only true results. True OR unknown is true, while
 false OR unknown remains unknown.
 
 ```sql
 SELECT path FROM files WHERE owner = 'root' OR kind = 'directory'
+SELECT path FROM files WHERE NOT (kind = 'directory' OR size = 0)
 ```
 
 ## Grouping and aggregates

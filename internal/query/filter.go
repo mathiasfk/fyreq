@@ -29,6 +29,15 @@ func (c *condition) evaluate(file catalog.File) truth {
 		return truthTrue
 	}
 	switch c.op {
+	case "NOT":
+		switch c.left.evaluate(file) {
+		case truthTrue:
+			return truthFalse
+		case truthFalse:
+			return truthTrue
+		default:
+			return truthUnknown
+		}
 	case "AND":
 		left := c.left.evaluate(file)
 		if left == truthFalse {
