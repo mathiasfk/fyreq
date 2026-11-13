@@ -50,7 +50,7 @@ formats in the parser or terminal rendering in the executor.
 
 Each path record contains an internal ID, absolute lexical path, basename, kind,
 size, modification time, observation time, optional native identity, and nullable
-filesystem owner UID and account name. Kinds
+filesystem owner ID and account name. Kinds
 are `file`, `directory`, `symlink`, and `other`. Size is the OS-reported byte size;
 directory size is not a recursive total, and symlink metadata describes the link.
 
@@ -58,9 +58,9 @@ The macOS adapter observes device and inode. Records retain their ID when
 reobserved at the same path with matching identity. A known replacement receives
 a new ID. Rename correlation and a normalized multi-path identity model remain
 future work. macOS ownership comes from the entry's native metadata; account names
-are resolved best-effort and cached per scan, including failed lookups. Missing
-ownership fields in older version-1 snapshots remain unknown until refreshed.
-Numeric UID zero remains distinct from an unavailable UID. Birth times and
+are resolved best-effort and cached per scan, including failed lookups. Version-1 snapshots lack a platform and are rejected without modification; collect
+into a new catalog directory. UID zero is stored as the string `"0"`, distinct
+from unavailable ownership. Birth times and
 permissions are not exposed yet; optional metadata must distinguish absence from
 zero.
 
@@ -102,8 +102,17 @@ Publication writes a private temporary file in the catalog directory, syncs and
 closes it, replaces `catalog.json` by rename, and syncs the directory. On macOS,
 readers opening the catalog see either the previous file or the replacement.
 Readers do not wait for collection. A failure after rename can mean the new
-generation is visible even though durability confirmation failed; callers must
-inspect state before assuming a reported storage error rolled back publication.
+generation is visible even though durability confirmation failed; the result reports publication and its generation even when confirmation fails.
+Reopening confirms visibility, not durability. Unsupported platforms explicitly
+reject publication.
+
+Paths and coverage roots are absolute, cleaned lexical keys with exact component
+comparison. Aliases and case variants are not unified. Each catalog records its
+origin platform and is rejected on a different platform before paths are validated.
+No cross-platform conversion is attempted. Default roots are resolved before
+sequential per-root updates; macOS currently selects `/`. Earlier publications
+remain committed if a later root fails. Missing discovered roots do not authorize
+deletion.
 
 The catalog is not a filesystem transaction: files can change during a scan.
 Observations are eventually reconciled by explicit updates. There is no automatic

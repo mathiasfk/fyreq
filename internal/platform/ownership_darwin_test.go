@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"fyreq/internal/catalog"
@@ -22,8 +23,8 @@ func TestScanCollectsOwnership(t *testing.T) {
 	count := 0
 	report, err := (Filesystem{}).Scan(context.Background(), root, func(file catalog.File) error {
 		count++
-		if file.UID == nil || *file.UID != int64(os.Getuid()) {
-			t.Errorf("incorrect UID for %q: %v", file.Path, file.UID)
+		if file.OwnerID == nil || *file.OwnerID != strconv.Itoa(os.Getuid()) {
+			t.Errorf("incorrect UID for %q: %v", file.Path, file.OwnerID)
 		}
 		return nil
 	})

@@ -9,7 +9,7 @@ import (
 func TestOwnerResolutionCachesSuccessAndFailure(t *testing.T) {
 	calls := make(map[string]int)
 	resolver := ownerResolver{
-		names: make(map[int64]*string),
+		names: make(map[string]*string),
 		lookup: func(uid string) (*user.User, error) {
 			calls[uid]++
 			if uid == "0" {
@@ -18,7 +18,7 @@ func TestOwnerResolutionCachesSuccessAndFailure(t *testing.T) {
 			return nil, errors.New("account unavailable")
 		},
 	}
-	root, unknown := int64(0), int64(12345)
+	root, unknown := "0", "12345"
 	for range 2 {
 		name := resolver.resolve(&root)
 		if name == nil || *name != "root" {

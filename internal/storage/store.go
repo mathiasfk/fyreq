@@ -11,12 +11,16 @@ import (
 	"path/filepath"
 	"time"
 
+	"fyreq/internal/app"
 	"fyreq/internal/catalog"
 )
 
 var ErrLocked = errors.New("catalog is locked by another writer; if a writer crashed, remove the .writer-lock directory only after verifying that no writer is running")
 
-type Store struct{ Dir string }
+type Store struct {
+	Dir            string
+	publishForTest func(string, string, string) (bool, error)
+}
 
 func (s Store) Load(ctx context.Context) (catalog.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
@@ -44,66 +48,68 @@ func (s Store) Load(ctx context.Context) (catalog.Snapshot, error) {
 
 // Update holds the writer lock across loading, mutation, and publication. A failed
 // callback leaves the previous snapshot untouched. Readers need no writer lock.
-func (s Store) Update(ctx context.Context, mutate func(*catalog.Snapshot) error) error {
+func (s Store) Update(ctx context.Context, mutate func(*catalog.Snapshot) error) (app.UpdateResult, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return app.UpdateResult{}, err
+	}
+	if err := publicationSupported(); err != nil {
+		return app.UpdateResult{}, err
 	}
 	if err := os.MkdirAll(s.Dir, 0700); err != nil {
-		return err
+		return app.UpdateResult{}, err
 	}
 	lock := filepath.Join(s.Dir, ".writer-lock")
 	if err := os.Mkdir(lock, 0700); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return ErrLocked
+			return app.UpdateResult{}, ErrLocked
 		}
-		return err
+		return app.UpdateResult{}, err
 	}
 	defer os.Remove(lock)
 	snapshot, err := s.Load(ctx)
 	if err != nil {
-		return err
+		return app.UpdateResult{}, err
 	}
 	if err := mutate(&snapshot); err != nil {
-		return err
+		return app.UpdateResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return app.UpdateResult{}, err
 	}
 	snapshot.Generation++
 	snapshot.UpdatedAt = time.Now().UTC()
 	if err := snapshot.Validate(); err != nil {
-		return err
+		return app.UpdateResult{}, err
 	}
-	return s.save(ctx, snapshot)
+	published, err := s.save(ctx, snapshot)
+	if published {
+		return app.UpdateResult{Published: true, Generation: snapshot.Generation}, err
+	}
+	return app.UpdateResult{}, err
 }
 
-func (s Store) save(ctx context.Context, snapshot catalog.Snapshot) error {
+func (s Store) save(ctx context.Context, snapshot catalog.Snapshot) (bool, error) {
 	f, err := os.CreateTemp(s.Dir, ".catalog-*.tmp")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
 	if err := json.NewEncoder(f).Encode(snapshot); err != nil {
-		return err
+		return false, err
 	}
 	if err := f.Sync(); err != nil {
-		return err
+		return false, err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Rename(f.Name(), filepath.Join(s.Dir, "catalog.json")); err != nil {
-		return err
+	commit := publish
+	if s.publishForTest != nil {
+		commit = s.publishForTest
 	}
-	// Sync the parent directory so the replacement survives a normal crash.
-	dir, err := os.Open(s.Dir)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return commit(f.Name(), filepath.Join(s.Dir, "catalog.json"), s.Dir)
 }

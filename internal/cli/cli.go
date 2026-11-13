@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +20,7 @@ import (
 const usage = `Usage: fyreq [--data-dir PATH] [--json] COMMAND
 
 Commands:
-  index [PATH]   Scan PATH into the global catalog (default: /).
+  index [PATH]   Scan PATH into the global catalog (default: platform roots).
   refresh [PATH] Reconcile PATH using the same collection mechanism.
   query SQL      Query the persisted catalog without scanning the filesystem.
   status         Show catalog size and coverage.
@@ -61,29 +60,38 @@ func Run(ctx context.Context, args []string, defaultDir string, build func(strin
 		if len(remaining) > 2 {
 			return fmt.Errorf("%s accepts at most one path", remaining[0])
 		}
-		root := string(filepath.Separator)
+		root := ""
 		if len(remaining) == 2 {
 			root = remaining[1]
-		}
-		report, err := application.Refresh(ctx, root)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			err = json.NewEncoder(out).Encode(report)
-		} else {
-			_, err = fmt.Fprintf(out, "Updated %s (complete: %t, collection errors: %d)\n", report.Root, report.Complete, report.ErrorCount)
-		}
-		if err != nil {
-			return err
-		}
-		if !report.Complete {
-			for _, message := range report.Errors {
-				fmt.Fprintln(diagnostics, message)
+			if root == "" {
+				return fmt.Errorf("path must not be empty")
 			}
-			return fmt.Errorf("scan incomplete; observed records were saved and unobserved records retained")
 		}
-		return nil
+		outcomes, updateErr := application.RefreshRoots(ctx, root)
+		if *asJSON {
+			if err := json.NewEncoder(out).Encode(outcomes); err != nil {
+				return err
+			}
+		} else {
+			for _, outcome := range outcomes {
+				if !outcome.Attempted {
+					fmt.Fprintf(out, "%q: not attempted\n", outcome.Root)
+					continue
+				}
+				fmt.Fprintf(out, "%q: published=%t generation=%d complete=%t collection errors=%d\n", outcome.Root, outcome.Publication.Published, outcome.Publication.Generation, outcome.Coverage.Complete, outcome.Coverage.ErrorCount)
+				for _, message := range outcome.Coverage.Errors {
+					fmt.Fprintln(diagnostics, message)
+				}
+			}
+		}
+		if updateErr != nil {
+			for _, outcome := range outcomes {
+				if outcome.Publication.Published && outcome.Error != "" {
+					return fmt.Errorf("generation %d was published but persistence confirmation failed: %w", outcome.Publication.Generation, updateErr)
+				}
+			}
+		}
+		return updateErr
 	case "query":
 		if len(remaining) != 2 {
 			return fmt.Errorf("query requires one quoted SQL expression")

@@ -21,7 +21,7 @@ func main() {
 	dir, err := os.UserConfigDir()
 	if err == nil {
 		err = cli.Run(ctx, os.Args[1:], filepath.Join(dir, "fyreq"), func(dir string) app.App {
-			return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+			return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}, Roots: platform.Roots{}}
 		}, os.Stdout, os.Stderr)
 	}
 	if err != nil {

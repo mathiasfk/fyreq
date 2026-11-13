@@ -79,15 +79,15 @@ func TestNotAndParentheses(t *testing.T) {
 func TestNullPredicates(t *testing.T) {
 	checkFilter(t, "owner IS NULL", []string{"/b", "/c"})
 	checkFilter(t, "owner IS NOT NULL", []string{"/a"})
-	checkFilter(t, "uid IS NULL", []string{"/a", "/b", "/c"})
-	checkFilter(t, "uid IS NOT NULL", []string{})
+	checkFilter(t, "owner_id IS NULL", []string{"/a", "/b", "/c"})
+	checkFilter(t, "owner_id IS NOT NULL", []string{})
 	checkFilter(t, "name IS NULL OR size IS NULL OR modified_at IS NULL", []string{})
 	checkFilter(t, "path is not null AND NOT (owner IS NOT NULL)", []string{"/b", "/c"})
 	checkFilter(t, "owner IS NULL AND size = 20 OR owner IS NOT NULL", []string{"/a", "/b"})
 	rejectFilters(t, "owner IS", "owner IS NOT", "owner IS 'NULL'", "owner IS NOT 'NULL'", "owner IS TRUE", "owner = NULL", "nope IS NULL", "owner IS NULL NULL")
-	zero, empty := int64(0), ""
-	files := map[string]catalog.File{"/a": {Path: "/a", UID: &zero, Owner: &empty}}
-	plan, err := Parse("SELECT path FROM files WHERE uid IS NOT NULL AND owner IS NOT NULL")
+	zero, empty := "0", ""
+	files := map[string]catalog.File{"/a": {Path: "/a", OwnerID: &zero, Owner: &empty}}
+	plan, err := Parse("SELECT path FROM files WHERE owner_id IS NOT NULL AND owner IS NOT NULL")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,5 +107,5 @@ func TestLikeFilters(t *testing.T) {
 	checkFilter(t, "name LIKE 'main§.go' ESCAPE '§'", []string{"/a"})
 	checkFilter(t, "name NOT LIKE 'main!.go' ESCAPE '!'", []string{"/b", "/c"})
 	checkFilter(t, "name like 'MAIN%'", []string{})
-	rejectFilters(t, "size LIKE '1%'", "uid NOT LIKE '%'", "modified_at LIKE '%'", "indexed_at LIKE '%'", "name LIKE", "name NOT LIKE", "name NOT = 'x'", "name LIKE 1", "name LIKE '\xff'", "name LIKE '%' ESCAPE", "name LIKE '%' ESCAPE ''", "name LIKE '%' ESCAPE 'ab'", "name LIKE '%' ESCAPE 1", "name LIKE 'abc!' ESCAPE '!'", "name LIKE '%' ESCAPE '\xff'")
+	rejectFilters(t, "size LIKE '1%'", "modified_at LIKE '%'", "indexed_at LIKE '%'", "name LIKE", "name NOT LIKE", "name NOT = 'x'", "name LIKE 1", "name LIKE '\xff'", "name LIKE '%' ESCAPE", "name LIKE '%' ESCAPE ''", "name LIKE '%' ESCAPE 'ab'", "name LIKE '%' ESCAPE 1", "name LIKE 'abc!' ESCAPE '!'", "name LIKE '%' ESCAPE '\xff'")
 }

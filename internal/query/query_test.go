@@ -56,8 +56,8 @@ func TestRejectInvalidQueries(t *testing.T) {
 		"SELECT * FROM files WHERE modified_at = 'yesterday'",
 		"SELECT * FROM files WHERE size >", "SELECT * FROM files WHERE size > 1 AND",
 		"SELECT * FROM files; SELECT * FROM files", "SELECT 'path' FROM files",
-		"SELECT * FROM files WHERE uid = '0'", "SELECT * FROM files WHERE uid = -1",
-		"SELECT * FROM files WHERE owner = root", "SELECT * FROM files WHERE uid = 9223372036854775808",
+		"SELECT * FROM files WHERE owner_id = 0", "SELECT * FROM files WHERE owner_id = -1",
+		"SELECT * FROM files WHERE owner = root", "SELECT * FROM files WHERE owner_id = 9223372036854775808",
 		"SELECT * FROM files ORDER", "SELECT * FROM files ORDER size",
 		"SELECT * FROM files ORDER BY", "SELECT * FROM files ORDER BY nope",
 		"SELECT * FROM files ORDER BY 'size'", "SELECT * FROM files ORDER BY size,",
@@ -74,14 +74,14 @@ func TestRejectInvalidQueries(t *testing.T) {
 }
 
 func TestOrderBy(t *testing.T) {
-	zero, high, low := int64(0), int64(100), int64(20)
+	zero, high, low := "0", "100", "20"
 	alice, bob := "alice", "bob"
 	early := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	late := early.Add(time.Hour)
 	files := map[string]catalog.File{
-		"/a": {Path: "/a", Name: "z", Kind: "file", Size: 2, UID: &high, Owner: &bob, ModifiedAt: late, IndexedAt: early},
-		"/b": {Path: "/b", Name: "m", Kind: "file", Size: 10, UID: &zero, Owner: &alice, ModifiedAt: early, IndexedAt: late},
-		"/c": {Path: "/c", Name: "m", Kind: "file", Size: 10, UID: &low, Owner: &alice, ModifiedAt: early.In(time.FixedZone("offset", 3600)), IndexedAt: late},
+		"/a": {Path: "/a", Name: "z", Kind: "file", Size: 2, OwnerID: &high, Owner: &bob, ModifiedAt: late, IndexedAt: early},
+		"/b": {Path: "/b", Name: "m", Kind: "file", Size: 10, OwnerID: &zero, Owner: &alice, ModifiedAt: early, IndexedAt: late},
+		"/c": {Path: "/c", Name: "m", Kind: "file", Size: 10, OwnerID: &low, Owner: &alice, ModifiedAt: early.In(time.FixedZone("offset", 3600)), IndexedAt: late},
 		"/d": {Path: "/d", Name: "a", Kind: "directory", Size: 100},
 		"/e": {Path: "/e", Name: "b", Kind: "file", Size: 3},
 	}
@@ -94,8 +94,8 @@ func TestOrderBy(t *testing.T) {
 		{"descending before limit", "SELECT path FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 2", []string{"/b", "/c"}},
 		{"multiple directions", "SELECT path FROM files ORDER BY size DESC, name ASC, path DESC", []string{"/d", "/c", "/b", "/e", "/a"}},
 		{"case insensitive", "select path from files order by NAME desc, PATH desc;", []string{"/a", "/c", "/b", "/e", "/d"}},
-		{"nullable ascending", "SELECT path FROM files ORDER BY uid ASC", []string{"/b", "/c", "/a", "/d", "/e"}},
-		{"nullable descending", "SELECT path FROM files ORDER BY uid DESC", []string{"/a", "/c", "/b", "/d", "/e"}},
+		{"nullable ascending", "SELECT path FROM files ORDER BY owner_id ASC", []string{"/b", "/a", "/c", "/d", "/e"}},
+		{"nullable descending", "SELECT path FROM files ORDER BY owner_id DESC", []string{"/c", "/a", "/b", "/d", "/e"}},
 		{"null ties", "SELECT path FROM files ORDER BY owner, size DESC", []string{"/b", "/c", "/a", "/d", "/e"}},
 		{"nullable string descending", "SELECT path FROM files ORDER BY owner DESC", []string{"/a", "/b", "/c", "/d", "/e"}},
 		{"timestamp instants", "SELECT path FROM files WHERE kind = 'file' ORDER BY modified_at DESC", []string{"/a", "/b", "/c", "/e"}},
@@ -127,20 +127,20 @@ func TestOrderBy(t *testing.T) {
 }
 
 func TestOwnershipQueriesAndUnavailableValues(t *testing.T) {
-	uid, owner := int64(0), "root"
+	ownerID, owner := "0", "root"
 	files := map[string]catalog.File{
-		"/known":      {Path: "/known", UID: &uid, Owner: &owner},
+		"/known":      {Path: "/known", OwnerID: &ownerID, Owner: &owner},
 		"/unknown":    {Path: "/unknown"},
-		"/unresolved": {Path: "/unresolved", UID: &uid},
+		"/unresolved": {Path: "/unresolved", OwnerID: &ownerID},
 	}
 	for _, tc := range []struct {
 		sql  string
 		want [][]any
 	}{
-		{"SELECT path, uid, owner FROM files WHERE owner = 'root' AND uid = 0", [][]any{{"/known", int64(0), "root"}}},
+		{"SELECT path, owner_id, owner FROM files WHERE owner = 'root' AND owner_id = '0'", [][]any{{"/known", "0", "root"}}},
 		{"SELECT path FROM files WHERE owner != 'other'", [][]any{{"/known"}}},
-		{"SELECT path FROM files WHERE uid >= 0", [][]any{{"/known"}, {"/unresolved"}}},
-		{"SELECT uid, owner FROM files WHERE path = '/unknown'", [][]any{{nil, nil}}},
+		{"SELECT path FROM files WHERE owner_id >= '0'", [][]any{{"/known"}, {"/unresolved"}}},
+		{"SELECT owner_id, owner FROM files WHERE path = '/unknown'", [][]any{{nil, nil}}},
 	} {
 		plan, err := Parse(tc.sql)
 		if err != nil {

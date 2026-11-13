@@ -1,20 +1,28 @@
 package catalog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestContains(t *testing.T) {
-	for _, tc := range []struct {
-		root, path string
-		want       bool
-	}{
-		{"/work", "/work", true},
-		{"/work", "/work/a", true},
-		{"/work", "/workspace/a", false},
-		{"/work", "/work/../elsewhere", false},
-		{"/", "/work/a", true},
-	} {
-		if got := Contains(tc.root, tc.path); got != tc.want {
-			t.Errorf("Contains(%q, %q) = %t, want %t", tc.root, tc.path, got, tc.want)
-		}
+func TestPlatformCheckedBeforePaths(t *testing.T) {
+	s := New()
+	s.Platform = "incompatible"
+	s.Files["relative"] = File{Path: "relative"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "platform") {
+		t.Fatalf("expected platform error: %v", err)
+	}
+}
+
+func TestInvalidPathsAndCoverage(t *testing.T) {
+	s := New()
+	s.Files["relative"] = File{ID: "x", Path: "relative"}
+	if err := s.Validate(); err == nil {
+		t.Fatal("accepted relative record")
+	}
+	s = New()
+	s.Coverage["relative"] = Coverage{Root: "relative"}
+	if err := s.Validate(); err == nil {
+		t.Fatal("accepted relative coverage")
 	}
 }

@@ -15,7 +15,8 @@ documentation, CLI output, commit descriptions, and agent instructions.
 - Define small interfaces at consumption boundaries. Do not add interfaces for
   every concrete type or speculative plugin systems.
 - Keep OS-specific metadata access in `internal/platform`, using filename
-  suffixes or build tags. macOS is the initial supported runtime.
+  suffixes or build tags. macOS is the initial supported runtime. A `_unix.go`
+  suffix is not a build constraint; explicitly select assessed targets.
 - Implement storage and query mechanics in this repository. Do not introduce
   external databases or storage engines.
 - Preserve previous catalog state when collection is canceled or a mutation

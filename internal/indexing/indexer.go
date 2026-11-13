@@ -8,20 +8,25 @@ import (
 	"fmt"
 
 	"fyreq/internal/catalog"
+	"fyreq/internal/pathpolicy"
 )
 
+// Collector invokes callbacks synchronously and sequentially, never after Scan returns.
+// Callback errors and cancellation are fatal. Paths must be absolute and normalized
+// within root. Complete coverage means the whole region under the link policy was visited.
 type Collector interface {
 	Scan(context.Context, string, func(catalog.File) error) (catalog.Coverage, error)
 }
 
 type Indexer struct{ Collector Collector }
 
-// Refresh retains unobserved records whenever collection is incomplete. This
+// Refresh mutates its working snapshot without rollback; the repository provides
+// the publication boundary. It retains unobserved records whenever collection is incomplete. This
 // conservative rule prevents inaccessible trees from looking like deletions.
 func (i Indexer) Refresh(ctx context.Context, snapshot *catalog.Snapshot, root string) (catalog.Coverage, error) {
 	seen := make(map[string]bool)
 	report, err := i.Collector.Scan(ctx, root, func(file catalog.File) error {
-		if !catalog.Contains(root, file.Path) {
+		if !pathpolicy.Contains(root, file.Path) {
 			return fmt.Errorf("collector returned path outside root: %s", file.Path)
 		}
 		previous, exists := snapshot.Files[file.Path]
@@ -43,7 +48,7 @@ func (i Indexer) Refresh(ctx context.Context, snapshot *catalog.Snapshot, root s
 	}
 	if report.Complete {
 		for path := range snapshot.Files {
-			if catalog.Contains(root, path) && !seen[path] {
+			if pathpolicy.Contains(root, path) && !seen[path] {
 				delete(snapshot.Files, path)
 			}
 		}

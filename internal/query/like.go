@@ -19,7 +19,7 @@ func (p *likePattern) matches(value string) bool {
 
 func (p *parser) like(field string, negated bool) (*condition, error) {
 	switch field {
-	case "size", "uid", "modified_at", "indexed_at":
+	case "size", "modified_at", "indexed_at":
 		return nil, fmt.Errorf("LIKE requires a string field")
 	}
 	literal, err := p.next()

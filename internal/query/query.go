@@ -16,7 +16,7 @@ import (
 	"fyreq/internal/catalog"
 )
 
-var fields = []string{"id", "path", "name", "kind", "size", "modified_at", "indexed_at", "uid", "owner"}
+var fields = []string{"id", "path", "name", "kind", "size", "modified_at", "indexed_at", "owner_id", "owner"}
 
 type predicate struct {
 	field string
@@ -188,7 +188,7 @@ func (p *parser) expression() (expression, error) {
 		if field == "*" && function != "count" {
 			return expression{}, fmt.Errorf("only COUNT accepts *")
 		}
-		if (function == "sum" || function == "avg") && field != "size" && field != "uid" {
+		if (function == "sum" || function == "avg") && field != "size" {
 			return expression{}, fmt.Errorf("%s requires a numeric field", strings.ToUpper(function))
 		}
 		return expression{field: field, aggregate: function}, nil
@@ -280,7 +280,7 @@ func (p *parser) comparison() (*condition, error) {
 	}
 	var value any
 	switch field {
-	case "size", "uid":
+	case "size":
 		v, err := strconv.ParseInt(literal.text, 10, 64)
 		if err != nil || literal.quoted || v < 0 {
 			return nil, fmt.Errorf("%s requires a non-negative integer", field)
@@ -451,9 +451,9 @@ func value(file catalog.File, field string) any {
 		return file.ModifiedAt
 	case "indexed_at":
 		return file.IndexedAt
-	case "uid":
-		if file.UID != nil {
-			return *file.UID
+	case "owner_id":
+		if file.OwnerID != nil {
+			return *file.OwnerID
 		}
 		return nil
 	case "owner":

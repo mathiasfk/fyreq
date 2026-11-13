@@ -8,4 +8,4 @@ import "io/fs"
 // platform support are not implemented yet.
 func identity(info fs.FileInfo) string { return "" }
 
-func ownershipUID(info fs.FileInfo) *int64 { return nil }
+func ownershipID(info fs.FileInfo) (*string, error) { return nil, nil }

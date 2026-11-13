@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"io/fs"
+	"strconv"
 	"syscall"
 )
 
@@ -13,10 +14,10 @@ func identity(info fs.FileInfo) string {
 	return ""
 }
 
-func ownershipUID(info fs.FileInfo) *int64 {
+func ownershipID(info fs.FileInfo) (*string, error) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		uid := int64(stat.Uid)
-		return &uid
+		uid := strconv.FormatUint(uint64(stat.Uid), 10)
+		return &uid, nil
 	}
-	return nil
+	return nil, fmt.Errorf("ownership metadata unavailable")
 }

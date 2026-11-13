@@ -46,7 +46,7 @@ Collect a small directory first:
 ./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' LIMIT 20"
 ./bin/fyreq query "SELECT path, size FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 20"
 ./bin/fyreq query "SELECT path FROM files WHERE size >= 1048576 AND kind = 'file'"
-./bin/fyreq query "SELECT path, uid, owner FROM files WHERE owner = 'root' LIMIT 20"
+./bin/fyreq query "SELECT path, owner_id, owner FROM files WHERE owner = 'root' LIMIT 20"
 ./bin/fyreq query "SELECT kind, COUNT(*) FROM files GROUP BY kind"
 ./bin/fyreq query "SELECT owner, SUM(size) FROM files WHERE kind = 'file' GROUP BY owner ORDER BY SUM(size) DESC LIMIT 10"
 ```
@@ -83,15 +83,15 @@ records, retains all unobserved records, records diagnostics, and exits with cod
 the relevant region succeeds. Up to 100 error messages are retained per root;
 the error count includes all collection errors.
 
-On macOS, collection includes the numeric filesystem owner (`uid`) and its
+On macOS, collection includes the filesystem owner ID (`owner_id`, a decimal UID string) and its
 best-effort account name (`owner`). Ownership is distinct from document authorship.
-Existing catalogs remain readable, but previously collected records return null
-ownership until refreshed. Unresolved account names are null even if the UID is
-known; numeric UID zero is a valid value. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
+Version-1 catalogs lack a platform and are rejected; collect into a new catalog
+directory with `--data-dir`. The old catalog is left untouched. Unresolved account names are null even if the UID is
+known; UID zero is represented as `"0"`. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
 
 ```sh
-./bin/fyreq query "SELECT path, uid FROM files WHERE owner IS NULL"
-./bin/fyreq query "SELECT path FROM files WHERE uid IS NOT NULL AND owner IS NULL"
+./bin/fyreq query "SELECT path, owner_id FROM files WHERE owner IS NULL"
+./bin/fyreq query "SELECT path FROM files WHERE owner_id IS NOT NULL AND owner IS NULL"
 ```
 
 See the query language for null behavior.
@@ -133,7 +133,11 @@ more characters, `_` for one). `ESCAPE` makes wildcard characters literal:
 Add `--json` before the command for structured output. Query JSON contains
 `columns`, `rows`, `generation`, and `coverage`. Text query output quotes strings
 to safely represent filenames containing tabs, newlines, and terminal controls.
-Errors go to stderr; successful commands exit with code 0, errors with code 1.
+Index and refresh JSON output is an array of per-root outcomes with coverage,
+`attempted`, `publication.published`, and the published generation. A published
+update with a persistence confirmation error exits nonzero while retaining the new
+generation. Reopening proves visibility, not durability. Errors go to stderr;
+successful commands exit with code 0, errors with code 1.
 
 ## Development
 
@@ -158,7 +162,8 @@ CLI flow from collection through querying and deletion.
 - Internal record IDs are retained at the same path when native identity agrees.
   Renames are not correlated, and hard links have separate path records. macOS
   device/inode identity is an observation, not an eternal identifier.
-- Collection uses lexical paths. Filesystem aliases, case variants, and native
+- Path and coverage keys are absolute, cleaned lexical paths with exact string
+  equality. Filesystem aliases, case variants, and native
   filename encodings outside valid UTF-8 are not normalized or fully modeled.
 - One writer is allowed. A crash can leave `.writer-lock` in the catalog
   directory. Verify that no writer is running before manually removing that
