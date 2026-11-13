@@ -23,7 +23,7 @@ func TestShellStatementsAndCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".status", "name", "count(*)", "Generation: 0", "No coverage recorded"} {
+	for _, want := range []string{"FyreQ shell.", "End SQL with ;", "Ctrl-D", ".status", "name", "count(*)", "Generation: 0", "No coverage recorded"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q: %s", want, out.String())
 		}
@@ -72,6 +72,8 @@ func (b blockingRepository) Load(ctx context.Context) (catalog.Snapshot, error) 
 	<-ctx.Done()
 	return catalog.Snapshot{}, ctx.Err()
 }
+func (blockingRepository) Clear(context.Context) (app.UpdateResult, error) { panic("unexpected clear") }
+
 func (blockingRepository) Update(context.Context, func(*catalog.Snapshot) error) (app.UpdateResult, error) {
 	panic("unexpected update")
 }
@@ -107,6 +109,9 @@ func TestShellInterruptClearsPendingInput(t *testing.T) {
 	go func() {
 		done <- runShell(context.Background(), app.App{Repository: storage.Store{Dir: t.TempDir()}}, input, signals, output, io.Discard)
 	}()
+	if got := <-output.writes; got != shellWelcome {
+		t.Fatal(got)
+	}
 	if got := <-output.writes; got != "fyreq> " {
 		t.Fatal(got)
 	}
@@ -154,10 +159,10 @@ func TestShellRenderingFailures(t *testing.T) {
 		input            string
 		out, diagnostics io.Writer
 	}{
-		{"table", "SELECT name FROM files;\n", &failAfterWrites{remaining: 1}, io.Discard},
+		{"table", "SELECT name FROM files;\n", &failAfterWrites{remaining: 2}, io.Discard},
 		{"query diagnostic", "SELECT name FROM files;\n", io.Discard, errorWriter{}},
 		{"error diagnostic", "invalid;\n", io.Discard, errorWriter{}},
-		{"status", ".status\n", &failAfterWrites{remaining: 1}, io.Discard},
+		{"status", ".status\n", &failAfterWrites{remaining: 2}, io.Discard},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := RunWithInput(context.Background(), []string{"shell"}, t.TempDir(), build, strings.NewReader(tc.input), nil, tc.out, tc.diagnostics)
@@ -201,6 +206,10 @@ func (r *cancelOnceRepository) Load(ctx context.Context) (catalog.Snapshot, erro
 	}
 	return catalog.Snapshot{Generation: 7, Files: map[string]catalog.File{}}, nil
 }
+func (*cancelOnceRepository) Clear(context.Context) (app.UpdateResult, error) {
+	panic("unexpected clear")
+}
+
 func (*cancelOnceRepository) Update(context.Context, func(*catalog.Snapshot) error) (app.UpdateResult, error) {
 	panic("unexpected update")
 }
@@ -217,6 +226,9 @@ func TestShellContinuesAfterCanceledQuery(t *testing.T) {
 	go func() {
 		done <- runShell(context.Background(), app.App{Repository: repo}, input, signals, output, &diagnostics)
 	}()
+	if got := <-output.writes; got != shellWelcome {
+		t.Fatal(got)
+	}
 	if got := <-output.writes; got != "fyreq> " {
 		t.Fatal(got)
 	}

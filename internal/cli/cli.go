@@ -21,6 +21,7 @@ Commands:
   refresh [PATH] Reconcile PATH using the same collection mechanism.
   query SQL      Query the persisted catalog without scanning the filesystem.
   status         Show catalog size and coverage.
+  clear          Remove all catalog records and coverage.
   shell          Start an interactive query session.
   help           Show this help.
 
@@ -81,6 +82,27 @@ func RunWithInput(ctx context.Context, args []string, defaultDir string, build f
 		}()
 	}
 	switch remaining[0] {
+	case "clear":
+		if len(remaining) != 1 {
+			return fmt.Errorf("clear accepts no arguments")
+		}
+		result, clearErr := application.Clear(ctx)
+		if *asJSON {
+			if err := json.NewEncoder(out).Encode(result); err != nil {
+				return err
+			}
+		}
+		if clearErr != nil {
+			if result.Published {
+				return fmt.Errorf("generation %d was published but persistence confirmation failed: %w", result.Generation, clearErr)
+			}
+			return clearErr
+		}
+		if !*asJSON {
+			_, err := fmt.Fprintf(out, "Catalog cleared (generation %d).\n", result.Generation)
+			return err
+		}
+		return nil
 	case "index", "refresh":
 		if len(remaining) > 2 {
 			return fmt.Errorf("%s accepts at most one path", remaining[0])

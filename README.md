@@ -55,6 +55,9 @@ Start a query session against the same catalog:
 
 ```text
 ./bin/fyreq shell
+FyreQ shell. End SQL with ; to execute.
+.help for help; .status for coverage; .exit or Ctrl-D at an empty prompt to exit.
+Ctrl-C clears pending input or requests cancellation of the current operation.
 fyreq> SELECT name, size
    ...> FROM files WHERE kind = 'file' LIMIT 20;
 fyreq> .status
@@ -111,8 +114,9 @@ the error count includes all collection errors.
 
 On macOS, collection includes the filesystem owner ID (`owner_id`, a decimal UID string) and its
 best-effort account name (`owner`). Ownership is distinct from document authorship.
-Version-1 catalogs lack a platform and are rejected; collect into a new catalog
-directory with `--data-dir`. The old catalog is left untouched. Unresolved account names are null even if the UID is
+Version-1 catalogs lack a platform and are rejected by queries and indexing; collect
+into a new catalog directory with `--data-dir` to leave the old catalog untouched,
+or use `clear` to discard the old catalog before collecting again. Unresolved account names are null even if the UID is
 known; UID zero is represented as `"0"`. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
 
 ```sh
@@ -154,6 +158,7 @@ more characters, `_` for one). `ESCAPE` makes wildcard characters literal:
 | `refresh [PATH]` | Reconcile a region; default `/` |
 | `query SQL` | Query recorded metadata without accessing the live filesystem |
 | `status` | Show generation, entry count, and coverage |
+| `clear` | Remove all records and coverage from the selected catalog |
 | `shell` | Start an interactive query session |
 | `help` | Show usage |
 
@@ -165,6 +170,25 @@ Index and refresh JSON output is an array of per-root outcomes with coverage,
 update with a persistence confirmation error exits nonzero while retaining the new
 generation. Reopening proves visibility, not durability. Errors go to stderr;
 successful commands exit with code 0, errors with code 1.
+
+To clear the index, run:
+
+```sh
+./bin/fyreq clear
+# Select a different catalog explicitly:
+./bin/fyreq --data-dir /path/to/catalog clear
+```
+
+`clear` immediately removes all records and coverage from the selected catalog,
+without a confirmation prompt. It does not delete the indexed filesystem entries.
+It publishes an empty catalog under the same writer lock and atomic replacement
+rules as indexing, starting a new generation history at 1 rather than deleting
+the catalog directory. An empty or missing catalog can also be cleared. Cancellation or failure
+before publication preserves the previous state; a persistence confirmation error
+after publication reports the visible generation and exits nonzero. `--json clear`
+returns `published` and, when published, `generation`. Unlike queries and indexing,
+`clear` does not read or validate the old catalog: it can replace legacy, corrupt,
+or incompatible catalogs with an empty catalog in the current format.
 
 ## Development
 

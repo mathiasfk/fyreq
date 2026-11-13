@@ -49,6 +49,26 @@ func (s Store) Load(ctx context.Context) (catalog.Snapshot, error) {
 // Update holds the writer lock across loading, mutation, and publication. A failed
 // callback leaves the previous snapshot untouched. Readers need no writer lock.
 func (s Store) Update(ctx context.Context, mutate func(*catalog.Snapshot) error) (app.UpdateResult, error) {
+	return s.write(ctx, func() (catalog.Snapshot, error) {
+		snapshot, err := s.Load(ctx)
+		if err != nil {
+			return catalog.Snapshot{}, err
+		}
+		if err := mutate(&snapshot); err != nil {
+			return catalog.Snapshot{}, err
+		}
+		return snapshot, nil
+	})
+}
+
+// Clear replaces any previous catalog without reading its format or contents.
+// The empty catalog starts a new generation history at one.
+func (s Store) Clear(ctx context.Context) (app.UpdateResult, error) {
+	return s.write(ctx, func() (catalog.Snapshot, error) { return catalog.New(), nil })
+}
+
+// write holds the writer lock while preparing and publishing a replacement.
+func (s Store) write(ctx context.Context, prepare func() (catalog.Snapshot, error)) (app.UpdateResult, error) {
 	if err := ctx.Err(); err != nil {
 		return app.UpdateResult{}, err
 	}
@@ -66,11 +86,8 @@ func (s Store) Update(ctx context.Context, mutate func(*catalog.Snapshot) error)
 		return app.UpdateResult{}, err
 	}
 	defer os.Remove(lock)
-	snapshot, err := s.Load(ctx)
+	snapshot, err := prepare()
 	if err != nil {
-		return app.UpdateResult{}, err
-	}
-	if err := mutate(&snapshot); err != nil {
 		return app.UpdateResult{}, err
 	}
 	if err := ctx.Err(); err != nil {

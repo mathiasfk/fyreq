@@ -200,9 +200,17 @@ All results reflect the selected persisted generation. The query engine does not
 infer freshness or completeness from the query predicate. A missing record can
 mean absence, lack of coverage, or a change since collection.
 
+`fyreq clear` removes all persisted records and coverage from the selected catalog
+and starts a new, empty catalog at generation 1, even if the old catalog is
+incompatible or corrupt. Queries then return empty results (or the
+normal aggregate result for empty input) until metadata is collected again. This
+does not indicate that the filesystem is empty; inspect `fyreq status` for coverage.
+
 ## Interactive shell
 
-`fyreq shell` runs statements after a semicolon outside a single-quoted string.
+`fyreq shell` starts with a short reminder of statement execution, help, coverage,
+exit commands, and Ctrl-C behavior. It runs statements after a semicolon outside
+a single-quoted string.
 A statement can span lines and several statements can appear on one line. The
 same doubled-quote and literal-backslash rules described above apply. Meta commands
 `.help`, `.status`, and `.exit` occupy a line by themselves with no pending SQL.

@@ -19,6 +19,8 @@ type repository struct {
 	calls int
 }
 
+func (r *repository) Clear(context.Context) (UpdateResult, error) { panic("unexpected clear") }
+
 func (r *repository) Load(context.Context) (catalog.Snapshot, error) { return r.snap, nil }
 func (r *repository) Update(ctx context.Context, f func(*catalog.Snapshot) error) (UpdateResult, error) {
 	r.calls++
@@ -68,6 +70,8 @@ type rootFunc func(context.Context) ([]string, error)
 func (f rootFunc) DefaultRoots(ctx context.Context) ([]string, error) { return f(ctx) }
 
 type repoFunc func(context.Context, func(*catalog.Snapshot) error) (UpdateResult, error)
+
+func (f repoFunc) Clear(context.Context) (UpdateResult, error) { panic("unexpected clear") }
 
 func (f repoFunc) Update(ctx context.Context, fn func(*catalog.Snapshot) error) (UpdateResult, error) {
 	return f(ctx, fn)

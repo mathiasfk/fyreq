@@ -12,6 +12,11 @@ import (
 	"fyreq/internal/app"
 )
 
+const shellWelcome = `FyreQ shell. End SQL with ; to execute.
+.help for help; .status for coverage; .exit or Ctrl-D at an empty prompt to exit.
+Ctrl-C clears pending input or requests cancellation of the current operation.
+`
+
 const shellHelp = `Enter SQL ending in a semicolon. Strings use doubled single quotes.
 .help    Show this help.
 .status  Show catalog coverage.
@@ -43,6 +48,9 @@ func splitStatement(s string) (string, string, bool) {
 }
 
 func runShell(ctx context.Context, application app.App, in io.Reader, interrupts <-chan os.Signal, out, diagnostics io.Writer) error {
+	if _, err := fmt.Fprint(out, shellWelcome); err != nil {
+		return err
+	}
 	reader := bufio.NewReader(in)
 	requests := make(chan struct{})
 	lines := make(chan inputLine, 1)

@@ -3,6 +3,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,71 @@ import (
 
 	"fyreq/internal/catalog"
 )
+
+func TestClearReplacesUnreadableCatalogs(t *testing.T) {
+	for _, input := range []string{
+		`{"version":1,"generation":42,"files":{},"coverage":{}}`,
+		`{"version":999,"files":{},"coverage":{}}`,
+		`{"version":2,"platform":"other-platform","files":{},"coverage":{}}`,
+		`{"version":2,"files":`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			store := Store{Dir: t.TempDir()}
+			path := filepath.Join(store.Dir, "catalog.json")
+			original := []byte(input)
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			assertUnchanged := func() {
+				t.Helper()
+				if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, original) {
+					t.Fatalf("failed clear changed catalog: %s, %v", after, err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if result, err := store.Clear(ctx); !errors.Is(err, context.Canceled) || result.Published {
+				t.Fatalf("canceled clear: %#v, %v", result, err)
+			}
+			assertUnchanged()
+			lock := filepath.Join(store.Dir, ".writer-lock")
+			if err := os.Mkdir(lock, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Clear(context.Background()); !errors.Is(err, ErrLocked) {
+				t.Fatalf("clear ignored writer lock: %v", err)
+			}
+			assertUnchanged()
+			if err := os.Remove(lock); err != nil {
+				t.Fatal(err)
+			}
+			failure := errors.New("publication failed")
+			store.publishForTest = func(string, string, string) (bool, error) { return false, failure }
+			if result, err := store.Clear(context.Background()); !errors.Is(err, failure) || result.Published {
+				t.Fatalf("failed clear: %#v, %v", result, err)
+			}
+			assertUnchanged()
+			store.publishForTest = nil
+			result, err := store.Clear(context.Background())
+			if err != nil || !result.Published || result.Generation != 1 {
+				t.Fatalf("clear: %#v, %v", result, err)
+			}
+			snapshot, err := store.Load(context.Background())
+			if err != nil || snapshot.Generation != 1 || len(snapshot.Files) != 0 || len(snapshot.Coverage) != 0 {
+				t.Fatalf("clear did not create a readable empty catalog: %#v, %v", snapshot, err)
+			}
+			store.publishForTest = func(src, dst, dir string) (bool, error) {
+				if err := os.Rename(src, dst); err != nil {
+					return false, err
+				}
+				return true, failure
+			}
+			if result, err := store.Clear(context.Background()); !errors.Is(err, failure) || !result.Published || result.Generation != 1 {
+				t.Fatalf("published clear with confirmation failure: %#v, %v", result, err)
+			}
+		})
+	}
+}
 
 func TestLegacyCatalogRejectedWithoutModification(t *testing.T) {
 	store := Store{Dir: t.TempDir()}

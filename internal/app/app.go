@@ -23,8 +23,10 @@ type UpdateResult struct {
 // private working snapshot that it must not retain. Callback errors or cancellation
 // before publication leave the prior generation untouched. A published result and
 // error means the replacement is visible but persistence confirmation failed.
+// Clear replaces the catalog without loading it and starts generation history anew.
 type Repository interface {
 	Load(context.Context) (catalog.Snapshot, error)
+	Clear(context.Context) (UpdateResult, error)
 	Update(context.Context, func(*catalog.Snapshot) error) (UpdateResult, error)
 }
 
@@ -148,6 +150,11 @@ type Status struct {
 	Generation uint64                      `json:"generation"`
 	Files      int                         `json:"files"`
 	Coverage   map[string]catalog.Coverage `json:"coverage"`
+}
+
+// Clear replaces the catalog even when its previous format cannot be read.
+func (a App) Clear(ctx context.Context) (UpdateResult, error) {
+	return a.Repository.Clear(ctx)
 }
 
 func (a App) Status(ctx context.Context) (Status, error) {

@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"fyreq/internal/app"
@@ -16,6 +18,69 @@ import (
 	"fyreq/internal/platform"
 	"fyreq/internal/storage"
 )
+
+func TestCLIClear(t *testing.T) {
+	ctx := context.Background()
+	root, data := t.TempDir(), t.TempDir()
+	path := filepath.Join(root, "keep.txt")
+	if err := os.WriteFile(path, []byte("contents"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	build := func(dir string) app.App {
+		return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+	}
+	var out, diagnostics bytes.Buffer
+	if err := Run(ctx, []string{"index", root}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	store := storage.Store{Dir: data}
+	original, err := os.ReadFile(filepath.Join(data, "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	lock := filepath.Join(data, ".writer-lock")
+	if err := os.Mkdir(lock, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(ctx, []string{"clear"}, data, build, &out, &diagnostics); !errors.Is(err, storage.ErrLocked) {
+		t.Fatalf("expected writer lock error, got %v", err)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(canceled, []string{"clear"}, data, build, &out, &diagnostics); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if err := Run(ctx, []string{"clear", root}, data, build, &out, &diagnostics); err == nil {
+		t.Fatal("clear accepted a path")
+	}
+	if after, err := os.ReadFile(filepath.Join(data, "catalog.json")); err != nil || !bytes.Equal(original, after) {
+		t.Fatalf("failed clear changed catalog: %v", err)
+	}
+	out.Reset()
+	if err := Run(ctx, []string{"--json", "clear"}, data, build, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	var result app.UpdateResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil || !result.Published || result.Generation != 1 {
+		t.Fatalf("clear result %s: %v", out.String(), err)
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil || snapshot.Generation != 1 || len(snapshot.Files) != 0 || len(snapshot.Coverage) != 0 {
+		t.Fatalf("catalog was not cleared: %#v, %v", snapshot, err)
+	}
+	if contents, err := os.ReadFile(path); err != nil || string(contents) != "contents" {
+		t.Fatalf("clear affected indexed file: %v", err)
+	}
+	for _, dir := range []string{data, filepath.Join(t.TempDir(), "new-catalog")} {
+		out.Reset()
+		if err := Run(ctx, []string{"clear"}, dir, build, &out, &diagnostics); err != nil || !strings.Contains(out.String(), "Catalog cleared") {
+			t.Fatalf("clearing empty catalog: %s, %v", out.String(), err)
+		}
+	}
+}
 
 func TestCLIIndexQueryRefresh(t *testing.T) {
 	root, data := t.TempDir(), t.TempDir()

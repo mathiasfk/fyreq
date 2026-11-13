@@ -110,6 +110,14 @@ generation is visible even though durability confirmation failed; the result rep
 Reopening confirms visibility, not durability. Unsupported platforms explicitly
 reject publication.
 
+`clear` is a distinct repository operation that publishes a new empty snapshot
+without reading or validating the old catalog. It resets generation history to 1
+and uses the current schema and platform, allowing recovery from legacy or corrupt
+catalogs. It shares the writer lock and publication path with ordinary updates;
+cancellation and failures before publication preserve the old file. It does not
+unlink the catalog or remove the directory. Queries and indexing still validate
+the existing catalog before using it.
+
 Paths and coverage roots are absolute, cleaned lexical keys with exact component
 comparison. Aliases and case variants are not unified. Each catalog records its
 origin platform and is rejected on a different platform before paths are validated.
