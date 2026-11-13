@@ -208,9 +208,10 @@ does not indicate that the filesystem is empty; inspect `fyreq status` for cover
 
 ## Interactive shell
 
-`fyreq shell` starts with a short reminder of statement execution, help, coverage,
-exit commands, and Ctrl-C behavior. It runs statements after a semicolon outside
-a single-quoted string.
+`fyreq shell` starts with a one-line reminder of statement execution and `.help`.
+The full help lists commands and keyboard shortcuts, including Ctrl-D to exit at
+an empty prompt. The shell runs statements after a semicolon outside a
+single-quoted string.
 A statement can span lines and several statements can appear on one line. The
 same doubled-quote and literal-backslash rules described above apply. Meta commands
 `.help`, `.status`, and `.exit` occupy a line by themselves with no pending SQL.

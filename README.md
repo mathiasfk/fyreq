@@ -55,9 +55,7 @@ Start a query session against the same catalog:
 
 ```text
 ./bin/fyreq shell
-FyreQ shell. End SQL with ; to execute.
-.help for help; .status for coverage; .exit or Ctrl-D at an empty prompt to exit.
-Ctrl-C clears pending input or requests cancellation of the current operation.
+FyreQ shell. End SQL with ; to execute. Use .help for help.
 fyreq> SELECT name, size
    ...> FROM files WHERE kind = 'file' LIMIT 20;
 fyreq> .status

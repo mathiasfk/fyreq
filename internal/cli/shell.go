@@ -12,16 +12,22 @@ import (
 	"fyreq/internal/app"
 )
 
-const shellWelcome = `FyreQ shell. End SQL with ; to execute.
-.help for help; .status for coverage; .exit or Ctrl-D at an empty prompt to exit.
-Ctrl-C clears pending input or requests cancellation of the current operation.
+const shellWelcome = `FyreQ shell. End SQL with ; to execute. Use .help for help.
 `
 
-const shellHelp = `Enter SQL ending in a semicolon. Strings use doubled single quotes.
-.help    Show this help.
-.status  Show catalog coverage.
-.exit    Exit the shell.
-Ctrl-C clears pending input or requests cancellation of the current operation.
+const shellHelp = `
+Enter SQL ending in a semicolon. Queries can span multiple lines.
+Strings use doubled single quotes to represent a quote.
+
+Commands (on a line by themselves, with no SQL pending):
+  .help    Show this help.
+  .status  Show catalog coverage.
+  .exit    Exit the shell.
+
+Keyboard shortcuts:
+  Ctrl-C   Clear pending input or request cancellation of the current operation.
+  Ctrl-D   Exit at an empty prompt.
+
 `
 
 type inputLine struct {
