@@ -8,11 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"sort"
-	"strconv"
+	"os"
 	"strings"
-	"text/tabwriter"
-	"time"
 
 	"fyreq/internal/app"
 )
@@ -24,6 +21,7 @@ Commands:
   refresh [PATH] Reconcile PATH using the same collection mechanism.
   query SQL      Query the persisted catalog without scanning the filesystem.
   status         Show catalog size and coverage.
+  shell          Start an interactive query session.
   help           Show this help.
 
 Examples:
@@ -31,13 +29,20 @@ Examples:
   fyreq query "SELECT path, size FROM files WHERE kind = 'file' LIMIT 20"
   fyreq --json status
 
-Global flags must appear before the command. Ctrl-C requests cancellation;
-changes already published remain committed. Incomplete scans are saved,
-reported, and return a nonzero exit.
+Global flags must appear before the command; shell does not support --json.
+Ctrl-C requests cancellation for one-shot commands. In shell it clears pending
+input or requests cancellation of the current operation, and the session continues.
+Changes already published remain committed. Incomplete scans are saved, reported,
+and return a nonzero exit.
 `
 
 // Run leaves process lifetime, dependency construction, and exit codes to main.
 func Run(ctx context.Context, args []string, defaultDir string, build func(string) app.App, out, diagnostics io.Writer) error {
+	return RunWithInput(ctx, args, defaultDir, build, strings.NewReader(""), nil, out, diagnostics)
+}
+
+// RunWithInput accepts an input stream and interrupt notifications for shell sessions.
+func RunWithInput(ctx context.Context, args []string, defaultDir string, build func(string) app.App, in io.Reader, interrupts <-chan os.Signal, out, diagnostics io.Writer) error {
 	flags := flag.NewFlagSet("fyreq", flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	dataDir := flags.String("data-dir", defaultDir, "Catalog directory")
@@ -55,6 +60,26 @@ func Run(ctx context.Context, args []string, defaultDir string, build func(strin
 		return err
 	}
 	application := build(*dataDir)
+	if remaining[0] == "shell" {
+		if len(remaining) != 1 {
+			return fmt.Errorf("shell accepts no arguments")
+		}
+		if *asJSON {
+			return fmt.Errorf("shell does not support --json")
+		}
+		return runShell(ctx, application, in, interrupts, out, diagnostics)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if interrupts != nil {
+		go func() {
+			select {
+			case <-interrupts:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 	switch remaining[0] {
 	case "index", "refresh":
 		if len(remaining) > 2 {
@@ -103,27 +128,8 @@ func Run(ctx context.Context, args []string, defaultDir string, build func(strin
 		if *asJSON {
 			return json.NewEncoder(out).Encode(result)
 		}
-		fmt.Fprintf(diagnostics, "Catalog generation %d; results reflect recorded observations. Use status to inspect coverage.\n", result.Generation)
-		writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, strings.Join(result.Columns, "\t"))
-		for _, row := range result.Rows {
-			cells := make([]string, len(row))
-			for i, value := range row {
-				switch v := value.(type) {
-				case nil:
-					cells[i] = "NULL"
-				case string:
-					// Filenames can contain tabs, newlines, or terminal controls.
-					cells[i] = strconv.Quote(v)
-				case time.Time:
-					cells[i] = v.Format(time.RFC3339Nano)
-				default:
-					cells[i] = fmt.Sprint(v)
-				}
-			}
-			fmt.Fprintln(writer, strings.Join(cells, "\t"))
-		}
-		return writer.Flush()
+		return renderQuery(out, diagnostics, result)
+
 	case "status":
 		if len(remaining) != 1 {
 			return fmt.Errorf("status accepts no arguments")
@@ -135,23 +141,8 @@ func Run(ctx context.Context, args []string, defaultDir string, build func(strin
 		if *asJSON {
 			return json.NewEncoder(out).Encode(status)
 		}
-		fmt.Fprintf(out, "Generation: %d\nEntries: %d\n", status.Generation, status.Files)
-		roots := make([]string, 0, len(status.Coverage))
-		for root := range status.Coverage {
-			roots = append(roots, root)
-		}
-		sort.Strings(roots)
-		if len(roots) == 0 {
-			_, err = fmt.Fprintln(out, "No coverage recorded. Run index to collect filesystem metadata.")
-			return err
-		}
-		for _, root := range roots {
-			report := status.Coverage[root]
-			if _, err := fmt.Fprintf(out, "%q: complete=%t errors=%d observed=%s\n", root, report.Complete, report.ErrorCount, report.CompletedAt.Format(time.RFC3339)); err != nil {
-				return err
-			}
-		}
-		return nil
+		return renderStatus(out, status)
+
 	default:
 		return fmt.Errorf("unknown command %q; run fyreq help", remaining[0])
 	}

@@ -51,6 +51,32 @@ Collect a small directory first:
 ./bin/fyreq query "SELECT owner, SUM(size) FROM files WHERE kind = 'file' GROUP BY owner ORDER BY SUM(size) DESC LIMIT 10"
 ```
 
+Start a query session against the same catalog:
+
+```text
+./bin/fyreq shell
+fyreq> SELECT name, size
+   ...> FROM files WHERE kind = 'file' LIMIT 20;
+fyreq> .status
+fyreq> .exit
+```
+
+SQL executes at a semicolon outside a single-quoted string; doubled quotes inside
+strings represent a quote. Multiple statements can share a line. Enter `.help`,
+`.status`, or `.exit` on a line by itself when no SQL is pending. An unfinished
+statement at end of input is an error; `.exit` within pending SQL is part of that
+statement. Query errors are reported and the session continues. The shell does
+not accept `--json`.
+
+Ctrl-C clears accumulated SQL while waiting for a line, or requests cooperative
+cancellation of the current query or status operation. Cancellation may wait for
+non-interruptible work such as loading or sorting. Ctrl-D exits at an empty prompt.
+Input uses standard line-oriented terminal handling: editing and the fate of
+characters typed on the current line after Ctrl-C depend on the terminal. With
+redirected or custom input, an interrupted read can remain blocked until input
+arrives; the shell cannot discard characters held by the reader. No history or
+completion is provided.
+
 To collect the accessible filesystem, omit the path:
 
 ```sh
@@ -128,9 +154,10 @@ more characters, `_` for one). `ESCAPE` makes wildcard characters literal:
 | `refresh [PATH]` | Reconcile a region; default `/` |
 | `query SQL` | Query recorded metadata without accessing the live filesystem |
 | `status` | Show generation, entry count, and coverage |
+| `shell` | Start an interactive query session |
 | `help` | Show usage |
 
-Add `--json` before the command for structured output. Query JSON contains
+Add `--json` before a one-shot command for structured output. Query JSON contains
 `columns`, `rows`, `generation`, and `coverage`. Text query output quotes strings
 to safely represent filenames containing tabs, newlines, and terminal controls.
 Index and refresh JSON output is an array of per-root outcomes with coverage,

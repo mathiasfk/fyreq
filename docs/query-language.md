@@ -199,3 +199,13 @@ Text output renders a table and directs users to `status` for coverage details.
 All results reflect the selected persisted generation. The query engine does not
 infer freshness or completeness from the query predicate. A missing record can
 mean absence, lack of coverage, or a change since collection.
+
+## Interactive shell
+
+`fyreq shell` runs statements after a semicolon outside a single-quoted string.
+A statement can span lines and several statements can appear on one line. The
+same doubled-quote and literal-backslash rules described above apply. Meta commands
+`.help`, `.status`, and `.exit` occupy a line by themselves with no pending SQL.
+An unfinished statement at end of input is an error. Query errors do not end the
+session. Query output identifies its catalog generation and `.status` reports
+coverage and observation times; no query implicitly scans the filesystem.

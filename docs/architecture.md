@@ -15,7 +15,7 @@ should reuse the same application operations.
 
 ```text
 cmd/fyreq (composition and process lifetime)
-  -> cli (arguments and presentation)
+  -> cli (arguments, shell session, and presentation)
        -> app (use cases)
             -> query (parse, validate, execute)
             -> indexing (reconcile observations)
@@ -25,6 +25,10 @@ storage implements app.Repository
 platform implements indexing.Collector
 catalog defines the shared metadata and coverage model
 ```
+
+The CLI shell reads line-oriented input, dispatches queries and status directly to
+the application, and shares result rendering with one-shot commands. It has no
+terminal editing or history layer; query operations use per-operation contexts.
 
 The composition root supplies concrete adapters. The application depends on a
 repository contract; indexing depends on a collector contract. Query execution

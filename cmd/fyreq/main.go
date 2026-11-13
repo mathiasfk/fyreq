@@ -16,13 +16,15 @@ import (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	ctx := context.Background()
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
 	dir, err := os.UserConfigDir()
 	if err == nil {
-		err = cli.Run(ctx, os.Args[1:], filepath.Join(dir, "fyreq"), func(dir string) app.App {
+		err = cli.RunWithInput(ctx, os.Args[1:], filepath.Join(dir, "fyreq"), func(dir string) app.App {
 			return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}, Roots: platform.Roots{}}
-		}, os.Stdout, os.Stderr)
+		}, os.Stdin, interrupts, os.Stdout, os.Stderr)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fyreq:", err)
