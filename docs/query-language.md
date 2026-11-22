@@ -3,6 +3,7 @@
 The initial language is a deliberately small SQL-like subset:
 
 ```text
+[EXPLAIN [ANALYZE]]
 SELECT (* | selection [, selection ...])
 FROM files
 [WHERE condition]
@@ -35,12 +36,16 @@ Backslashes are literal characters rather than escape sequences.
 | `kind` | String | `file`, `directory`, `symlink`, or `other` |
 | `size` | Integer | OS-reported size in bytes, not recursive directory usage |
 | `modified_at` | Timestamp | Observed last modification time |
-| `indexed_at` | Timestamp | Time this record was observed |
+| `indexed_at` | Timestamp | Time the record's current metadata was first recorded |
 | `owner_id` | Nullable string | Native filesystem owner ID; decimal UID text on macOS |
 | `owner` | Nullable string | Owner account name resolved at collection time |
 
 `SELECT *` expands to the fields in the order above. Native filesystem identity
-is stored internally and is not a query field yet.
+is stored internally and is not a query field yet; `fyreq export` includes it.
+
+Refreshing a record whose other values are unchanged does not rewrite it, so
+`indexed_at` does not advance until a change is recorded. Use coverage
+`completed_at` to see when a root was last verified.
 
 Ownership means the filesystem owner, not the document author or original
 creator. The account name is resolved once per native owner ID per scan and can be unavailable
@@ -105,7 +110,9 @@ Patterns are compiled once per query using the standard library's regular
 expression engine, with literals escaped and no exponential backtracking.
 LIKE does not apply filesystem path-component rules: `%` can match `/`, and
 `path LIKE '/tmp/app%'` can also match `/tmp/application`. It is not a
-path-descendant operator.
+path-descendant operator. Patterns starting with literal characters, such as
+`path LIKE '/tmp/app/%'`, let storage skip blocks outside that prefix; records
+are stored in path order, so path prefixes prune best.
 
 ## Grouping and aggregates
 
@@ -177,6 +184,44 @@ Unknown fields, unknown relations, invalid literals, unsupported operators, and
 trailing statements produce errors. There is no glob matching,
 path-descendant operator, arithmetic, joins, aliases, or live
 filesystem access yet.
+
+## Plans
+
+`EXPLAIN` before a query returns its plan instead of its rows, without reading
+records. `EXPLAIN ANALYZE` executes the query, discards its rows, and adds the
+actual work. Both keywords are case-insensitive.
+
+```sql
+EXPLAIN SELECT path, size FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 20
+EXPLAIN ANALYZE SELECT owner, COUNT(*) FROM files GROUP BY owner
+```
+
+The result has one `plan` column with one row per line. Text output prints the
+lines directly, quoting a line only if it contains control characters. Lines
+are indented by execution stage, outermost first:
+
+```text
+Project: path, size
+  Limit: 20
+    Top-N sort: size DESC, path ASC
+      Filter: kind = 'file'
+        Scan: files
+          Columns: filter kind; output path, size
+          Segments: 3, pruned 0
+          Blocks: 40, pruned 12
+          Rows: at most 28672 candidates
+```
+
+The ordering stage is `Order: path ASC from scan` when records already arrive in
+result order (optionally stopping at the limit), `Top-N sort` for other orderings
+with a positive limit, and `Sort` otherwise. Grouped queries show an `Aggregate`
+stage. `Columns` lists the fields decoded to evaluate the filter and the
+additional fields decoded only for blocks with matches. `Segments` and
+`Blocks` show how many storage units minimum/maximum statistics skip. Without
+ANALYZE, `Rows` is an upper bound: the rows in blocks that were not skipped.
+ANALYZE reports rows read and matched, bytes read, rows returned, and execution
+time; a scan that stops at its limit reports only the work done. The plan text
+is for people and may change; do not parse it.
 
 ## Results and coverage
 

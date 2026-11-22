@@ -9,8 +9,14 @@ import (
 
 // Patterns are compiled once per plan. Go's regexp engine avoids exponential
 // backtracking; quoting literals keeps LIKE independent of regular expression syntax.
+// The literal prefix and source text support pruning and plan descriptions.
 type likePattern struct {
 	expression *regexp.Regexp
+	source     string
+	escape     rune
+	hasEscape  bool
+	prefix     string
+	prefixOnly bool
 }
 
 func (p *likePattern) matches(value string) bool {
@@ -56,15 +62,22 @@ func compileLike(pattern string, escape rune, hasEscape bool) (*likePattern, err
 	if !utf8.ValidString(pattern) {
 		return nil, fmt.Errorf("LIKE pattern must be valid UTF-8")
 	}
-	var expression strings.Builder
+	var expression, prefix strings.Builder
 	expression.WriteString(`(?s)\A`)
 	escaped := false
 	percent := false
+	literal := true
+	wildcardsOnly := true
 	for _, r := range pattern {
 		if escaped {
 			expression.WriteString(regexp.QuoteMeta(string(r)))
 			escaped = false
 			percent = false
+			if literal {
+				prefix.WriteRune(r)
+			} else {
+				wildcardsOnly = false
+			}
 		} else if hasEscape && r == escape {
 			escaped = true
 		} else if r == '%' {
@@ -72,11 +85,19 @@ func compileLike(pattern string, escape rune, hasEscape bool) (*likePattern, err
 				expression.WriteString(".*")
 			}
 			percent = true
+			literal = false
 		} else {
 			if r == '_' {
 				expression.WriteByte('.')
+				literal = false
+				wildcardsOnly = false
 			} else {
 				expression.WriteString(regexp.QuoteMeta(string(r)))
+				if literal {
+					prefix.WriteRune(r)
+				} else {
+					wildcardsOnly = false
+				}
 			}
 			percent = false
 		}
@@ -89,5 +110,12 @@ func compileLike(pattern string, escape rune, hasEscape bool) (*likePattern, err
 	if err != nil {
 		return nil, fmt.Errorf("invalid LIKE pattern: %w", err)
 	}
-	return &likePattern{expression: compiled}, nil
+	result := &likePattern{expression: compiled, source: pattern, escape: escape, hasEscape: hasEscape}
+	// The regexp engine decodes invalid UTF-8 in values as U+FFFD, so a literal
+	// U+FFFD can match bytes that do not share the prefix.
+	if !strings.ContainsRune(prefix.String(), utf8.RuneError) {
+		result.prefix = prefix.String()
+		result.prefixOnly = !literal && wildcardsOnly
+	}
+	return result, nil
 }

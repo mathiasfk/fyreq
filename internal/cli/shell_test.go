@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"fyreq/internal/app"
-	"fyreq/internal/catalog"
 	"fyreq/internal/query"
 	"fyreq/internal/storage"
 )
@@ -67,14 +66,14 @@ func TestShellOutputFailure(t *testing.T) {
 
 type blockingRepository struct{ started chan struct{} }
 
-func (b blockingRepository) Load(ctx context.Context) (catalog.Snapshot, error) {
+func (b blockingRepository) Open(ctx context.Context) (app.Snapshot, error) {
 	close(b.started)
 	<-ctx.Done()
-	return catalog.Snapshot{}, ctx.Err()
+	return nil, ctx.Err()
 }
 func (blockingRepository) Clear(context.Context) (app.UpdateResult, error) { panic("unexpected clear") }
 
-func (blockingRepository) Update(context.Context, func(*catalog.Snapshot) error) (app.UpdateResult, error) {
+func (blockingRepository) Update(context.Context, func(app.Transaction) error) (app.UpdateResult, error) {
 	panic("unexpected update")
 }
 func TestShellOperationInterrupt(t *testing.T) {
@@ -83,7 +82,7 @@ func TestShellOperationInterrupt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := shellOperation(context.Background(), signals, func(ctx context.Context) (func() error, error) {
-			_, err := (blockingRepository{started}).Load(ctx)
+			_, err := (blockingRepository{started}).Open(ctx)
 			return nil, err
 		})
 		done <- err
@@ -197,20 +196,20 @@ type cancelOnceRepository struct {
 	calls   int
 }
 
-func (r *cancelOnceRepository) Load(ctx context.Context) (catalog.Snapshot, error) {
+func (r *cancelOnceRepository) Open(ctx context.Context) (app.Snapshot, error) {
 	r.calls++
 	if r.calls == 1 {
 		close(r.started)
 		<-ctx.Done()
-		return catalog.Snapshot{}, ctx.Err()
+		return nil, ctx.Err()
 	}
-	return catalog.Snapshot{Generation: 7, Files: map[string]catalog.File{}}, nil
+	return emptySnapshot{generation: 7}, nil
 }
 func (*cancelOnceRepository) Clear(context.Context) (app.UpdateResult, error) {
 	panic("unexpected clear")
 }
 
-func (*cancelOnceRepository) Update(context.Context, func(*catalog.Snapshot) error) (app.UpdateResult, error) {
+func (*cancelOnceRepository) Update(context.Context, func(app.Transaction) error) (app.UpdateResult, error) {
 	panic("unexpected update")
 }
 

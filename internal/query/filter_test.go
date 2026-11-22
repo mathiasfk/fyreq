@@ -21,7 +21,7 @@ func checkFilter(t *testing.T, where string, want []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), plan, files)
+	result, err := Execute(context.Background(), plan, Records(files))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func checkFilter(t *testing.T, where string, want []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err = Execute(context.Background(), plan, files)
+	result, err = Execute(context.Background(), plan, Records(files))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestNullPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), plan, files)
+	result, err := Execute(context.Background(), plan, Records(files))
 	if err != nil || len(result.Rows) != 1 {
 		t.Fatalf("zero and empty string are not null: %#v, %v", result, err)
 	}

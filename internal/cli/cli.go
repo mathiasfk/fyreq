@@ -17,17 +17,21 @@ import (
 const usage = `Usage: fyreq [--data-dir PATH] [--json] COMMAND
 
 Commands:
-  index [PATH]   Scan PATH into the global catalog (default: platform roots).
-  refresh [PATH] Reconcile PATH using the same collection mechanism.
+  index [PATH]   Scan PATH (default: platform roots), adding it to the known roots.
+  refresh        Rescan every known root.
   query SQL      Query the persisted catalog without scanning the filesystem.
+                 Prefix SQL with EXPLAIN or EXPLAIN ANALYZE to show its plan.
   status         Show catalog size and coverage.
+  export         Write the whole catalog to standard output as JSON.
   clear          Remove all catalog records and coverage.
   shell          Start an interactive query session.
   help           Show this help.
 
 Examples:
   fyreq index "$HOME/Projects"
+  fyreq refresh
   fyreq query "SELECT path, size FROM files WHERE kind = 'file' LIMIT 20"
+  fyreq query "EXPLAIN ANALYZE SELECT path FROM files WHERE size > 1048576"
   fyreq --json status
 
 Global flags must appear before the command; shell does not support --json.
@@ -104,23 +108,36 @@ func RunWithInput(ctx context.Context, args []string, defaultDir string, build f
 		}
 		return nil
 	case "index", "refresh":
-		if len(remaining) > 2 {
-			return fmt.Errorf("%s accepts at most one path", remaining[0])
-		}
-		root := ""
-		if len(remaining) == 2 {
-			root = remaining[1]
-			if root == "" {
-				return fmt.Errorf("path must not be empty")
+		var outcomes []app.RootOutcome
+		var updateErr error
+		if remaining[0] == "index" {
+			if len(remaining) > 2 {
+				return fmt.Errorf("index accepts at most one path")
 			}
+			root := ""
+			if len(remaining) == 2 {
+				root = remaining[1]
+				if root == "" {
+					return fmt.Errorf("path must not be empty")
+				}
+			}
+			outcomes, updateErr = application.Index(ctx, root)
+		} else {
+			if len(remaining) != 1 {
+				return fmt.Errorf("refresh accepts no arguments; use index PATH to add a root")
+			}
+			outcomes, updateErr = application.Refresh(ctx)
 		}
-		outcomes, updateErr := application.RefreshRoots(ctx, root)
 		if *asJSON {
 			if err := json.NewEncoder(out).Encode(outcomes); err != nil {
 				return err
 			}
 		} else {
 			for _, outcome := range outcomes {
+				if outcome.Skipped {
+					fmt.Fprintf(out, "%q: skipped; no longer indexed\n", outcome.Root)
+					continue
+				}
 				if !outcome.Attempted {
 					fmt.Fprintf(out, "%q: not attempted\n", outcome.Root)
 					continue
@@ -139,6 +156,11 @@ func RunWithInput(ctx context.Context, args []string, defaultDir string, build f
 			}
 		}
 		return updateErr
+	case "export":
+		if len(remaining) != 1 {
+			return fmt.Errorf("export accepts no arguments")
+		}
+		return renderExport(ctx, application, out)
 	case "query":
 		if len(remaining) != 2 {
 			return fmt.Errorf("query requires one quoted SQL expression")

@@ -54,7 +54,7 @@ func TestGroupedQueries(t *testing.T) {
 				t.Fatal(err)
 			}
 			for range 3 {
-				result, err := Execute(context.Background(), plan, files)
+				result, err := Execute(context.Background(), plan, Records(files))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -103,7 +103,7 @@ func TestGroupingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), plan, files)
+	result, err := Execute(context.Background(), plan, Records(files))
 	if err != nil || !reflect.DeepEqual(result.Rows, [][]any{{int64(1)}, {int64(1)}}) {
 		t.Fatalf("tuple keys collided: %#v, %v", result.Rows, err)
 	}
@@ -111,7 +111,7 @@ func TestGroupingKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err = Execute(context.Background(), plan, files)
+	result, err = Execute(context.Background(), plan, Records(files))
 	if err != nil || !reflect.DeepEqual(result.Rows, [][]any{{instant, int64(2)}}) {
 		t.Fatalf("equivalent timestamps were not grouped: %#v, %v", result.Rows, err)
 	}
@@ -123,23 +123,23 @@ func TestAggregationOverflowAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Execute(context.Background(), plan, files); err == nil || !strings.Contains(err.Error(), "64-bit") {
+	if _, err := Execute(context.Background(), plan, Records(files)); err == nil || !strings.Contains(err.Error(), "64-bit") {
 		t.Fatalf("expected sum overflow, got %v", err)
 	}
 	plan, err = Parse("SELECT AVG(size) FROM files")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), plan, files)
+	result, err := Execute(context.Background(), plan, Records(files))
 	if err != nil || !reflect.DeepEqual(result.Rows, [][]any{{float64(math.MaxInt64)}}) {
 		t.Fatalf("average overflowed: %#v, %v", result.Rows, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Execute(ctx, plan, files); !errors.Is(err, context.Canceled) {
+	if _, err := Execute(ctx, plan, Records(files)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
-	result, err = Execute(context.Background(), plan, nil)
+	result, err = Execute(context.Background(), plan, Records(nil))
 	if err != nil || !reflect.DeepEqual(result.Rows, [][]any{{nil}}) {
 		t.Fatalf("unexpected empty catalog aggregate: %#v, %v", result.Rows, err)
 	}

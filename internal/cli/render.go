@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -8,13 +11,29 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"fyreq/internal/app"
+	"fyreq/internal/catalog"
 )
 
 func renderQuery(out, diagnostics io.Writer, result app.QueryResult) error {
 	if _, err := fmt.Fprintf(diagnostics, "Catalog generation %d; results reflect recorded observations. Inspect coverage with status or .status.\n", result.Generation); err != nil {
 		return err
+	}
+	if result.Explain {
+		for _, row := range result.Rows {
+			line, _ := row[0].(string)
+			// Plan lines echo query literals, which can contain terminal controls.
+			if !utf8.ValidString(line) || strings.IndexFunc(line, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+				line = strconv.Quote(line)
+			}
+			if _, err := fmt.Fprintln(out, line); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(writer, strings.Join(result.Columns, "\t")); err != nil {
@@ -62,4 +81,46 @@ func renderStatus(out io.Writer, status app.Status) error {
 		}
 	}
 	return nil
+}
+
+// renderExport streams one snapshot as a JSON object: the header fields, the
+// storage segments, and every record in ascending path order. Output already
+// written stays truncated if the export fails.
+func renderExport(ctx context.Context, application app.App, out io.Writer) error {
+	writer := bufio.NewWriter(out)
+	first := true
+	err := application.Export(ctx, func(header catalog.Header, segments []catalog.Segment) error {
+		if segments == nil {
+			segments = []catalog.Segment{}
+		}
+		encoded, err := json.Marshal(struct {
+			catalog.Header
+			Segments []catalog.Segment `json:"segments"`
+		}{header, segments})
+		if err != nil {
+			return err
+		}
+		writer.Write(encoded[:len(encoded)-1])
+		_, err = writer.WriteString(`,"files":[`)
+		return err
+	}, func(file catalog.File) error {
+		if !first {
+			writer.WriteByte(',')
+		}
+		first = false
+		encoded, err := json.Marshal(file)
+		if err != nil {
+			return err
+		}
+		_, err = writer.Write(encoded)
+		return err
+	})
+	if err != nil {
+		writer.Flush()
+		return err
+	}
+	if _, err := writer.WriteString("]}\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
 }

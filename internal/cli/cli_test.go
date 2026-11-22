@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || linux
 
 package cli
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"fyreq/internal/app"
+	"fyreq/internal/catalog"
 	"fyreq/internal/indexing"
 	"fyreq/internal/platform"
 	"fyreq/internal/storage"
@@ -34,7 +35,7 @@ func TestCLIClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := storage.Store{Dir: data}
-	original, err := os.ReadFile(filepath.Join(data, "catalog.json"))
+	original, err := os.ReadFile(filepath.Join(data, "manifest"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestCLIClear(t *testing.T) {
 	if err := Run(ctx, []string{"clear", root}, data, build, &out, &diagnostics); err == nil {
 		t.Fatal("clear accepted a path")
 	}
-	if after, err := os.ReadFile(filepath.Join(data, "catalog.json")); err != nil || !bytes.Equal(original, after) {
+	if after, err := os.ReadFile(filepath.Join(data, "manifest")); err != nil || !bytes.Equal(original, after) {
 		t.Fatalf("failed clear changed catalog: %v", err)
 	}
 	out.Reset()
@@ -67,9 +68,13 @@ func TestCLIClear(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil || !result.Published || result.Generation != 1 {
 		t.Fatalf("clear result %s: %v", out.String(), err)
 	}
-	snapshot, err := store.Load(ctx)
-	if err != nil || snapshot.Generation != 1 || len(snapshot.Files) != 0 || len(snapshot.Coverage) != 0 {
-		t.Fatalf("catalog was not cleared: %#v, %v", snapshot, err)
+	snapshot, err := store.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if header := snapshot.Header(); header.Generation != 1 || header.Entries != 0 || len(header.Coverage) != 0 {
+		t.Fatalf("catalog was not cleared: %#v", header)
 	}
 	if contents, err := os.ReadFile(path); err != nil || string(contents) != "contents" {
 		t.Fatalf("clear affected indexed file: %v", err)
@@ -110,7 +115,11 @@ func TestCLIIndexQueryRefresh(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	run("refresh", root)
+	var failure bytes.Buffer
+	if err := Run(context.Background(), []string{"refresh", root}, data, build, &failure, &failure); err == nil {
+		t.Fatal("refresh accepted a path")
+	}
+	run("refresh")
 	if err := json.Unmarshal(run("--json", "query", "SELECT path FROM files WHERE kind = 'file'"), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -159,9 +168,13 @@ func TestCLIReportsIncompleteScan(t *testing.T) {
 	if err == nil || diagnostics.Len() == 0 {
 		t.Fatal("expected incomplete scan error and diagnostics")
 	}
-	snapshot, err := (storage.Store{Dir: data}).Load(context.Background())
-	if err != nil || snapshot.Generation != 1 || len(snapshot.Coverage) != 1 {
-		t.Fatalf("incomplete scan was not persisted: %#v, %v", snapshot, err)
+	snapshot, err := (storage.Store{Dir: data}).Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if header := snapshot.Header(); header.Generation != 1 || len(header.Coverage) != 1 {
+		t.Fatalf("incomplete scan was not persisted: %#v", header)
 	}
 }
 
@@ -231,5 +244,76 @@ func TestCLIBooleanPatternFilters(t *testing.T) {
 		if !reflect.DeepEqual(result.Rows, tc.want) || result.Generation != 1 || len(result.Coverage) != 1 {
 			t.Fatalf("%s: unexpected result %#v", tc.sql, result)
 		}
+	}
+}
+
+func TestCLIExportAndExplain(t *testing.T) {
+	root, data := t.TempDir(), t.TempDir()
+	for _, name := range []string{"b.txt", "a.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := func(dir string) app.App {
+		return app.App{Repository: storage.Store{Dir: dir}, Indexer: indexing.Indexer{Collector: platform.Filesystem{}}}
+	}
+	run := func(args ...string) (string, string) {
+		t.Helper()
+		var out, diagnostics bytes.Buffer
+		if err := Run(context.Background(), args, data, build, &out, &diagnostics); err != nil {
+			t.Fatalf("Run(%v): %v; %s", args, err, diagnostics.String())
+		}
+		return out.String(), diagnostics.String()
+	}
+	empty, _ := run("export")
+	var export struct {
+		FormatVersion int                         `json:"format_version"`
+		Generation    uint64                      `json:"generation"`
+		Entries       uint64                      `json:"entries"`
+		Coverage      map[string]catalog.Coverage `json:"coverage"`
+		Segments      []catalog.Segment           `json:"segments"`
+		Files         []catalog.File              `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(empty), &export); err != nil || export.Generation != 0 || export.Files == nil || export.Segments == nil {
+		t.Fatalf("empty export %s: %v", empty, err)
+	}
+	run("index", root)
+	out, _ := run("export")
+	if err := json.Unmarshal([]byte(out), &export); err != nil {
+		t.Fatalf("export %s: %v", out, err)
+	}
+	if export.FormatVersion != 1 || export.Generation != 1 || export.Entries != 3 || len(export.Files) != 3 || len(export.Segments) != 1 || len(export.Coverage) != 1 {
+		t.Fatalf("unexpected export: %s", out)
+	}
+	if export.Files[0].Path != root || export.Files[1].Name != "a.txt" || export.Files[2].Name != "b.txt" || export.Files[1].Identity == "" {
+		t.Fatalf("export records: %#v", export.Files)
+	}
+	var failure bytes.Buffer
+	if err := Run(context.Background(), []string{"export", "extra"}, data, build, &failure, &failure); err == nil {
+		t.Fatal("export accepted an argument")
+	}
+	plan, diagnostics := run("query", "EXPLAIN SELECT name FROM files WHERE kind = 'file' ORDER BY size DESC LIMIT 1")
+	for _, want := range []string{"Project: name\n", "  Limit: 1\n", "Top-N sort: size DESC, path ASC", "Filter: kind = 'file'", "Scan: files", "Columns: filter kind; output path, name, size", "Rows: at most 3 candidates"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("plan missing %q:\n%s", want, plan)
+		}
+	}
+	if !strings.Contains(diagnostics, "Catalog generation 1") {
+		t.Errorf("diagnostics: %s", diagnostics)
+	}
+	analyzed, _ := run("query", "EXPLAIN ANALYZE SELECT kind, COUNT(*) FROM files GROUP BY kind")
+	for _, want := range []string{"Aggregate: group by kind; aggregates: count(*)", "Rows: read 3, matched 3", "Rows returned: 2", "Execution time:"} {
+		if !strings.Contains(analyzed, want) {
+			t.Errorf("analyze missing %q:\n%s", want, analyzed)
+		}
+	}
+	quoted, _ := run("query", "EXPLAIN SELECT path FROM files WHERE name = 'a\nb\x1b'")
+	if !strings.Contains(quoted, `\n`) || strings.Contains(quoted, "\x1b") {
+		t.Errorf("unsafe plan output: %q", quoted)
+	}
+	jsonPlan, _ := run("--json", "query", "EXPLAIN SELECT path FROM files")
+	var result app.QueryResult
+	if err := json.Unmarshal([]byte(jsonPlan), &result); err != nil || !result.Explain || !reflect.DeepEqual(result.Columns, []string{"plan"}) || result.Generation != 1 {
+		t.Fatalf("json plan %s: %v", jsonPlan, err)
 	}
 }

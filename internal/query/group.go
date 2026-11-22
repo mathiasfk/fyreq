@@ -96,7 +96,7 @@ type group struct {
 	aggregates map[expression]*accumulator
 }
 
-func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.File) (Result, error) {
+func executeGrouped(ctx context.Context, plan Plan, source Source) (Result, ScanStats, error) {
 	result := Result{Columns: append([]string(nil), plan.columns...), Rows: make([][]any, 0)}
 	aggregates := make(map[expression]bool)
 	for _, expr := range plan.selections {
@@ -124,14 +124,10 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 	if len(plan.groupBy) == 0 {
 		groups["[]"] = newGroup(nil)
 	}
-	for _, file := range files {
+	stats, err := source.Scan(ctx, plan.Request(), func(file catalog.File) error {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return err
 		}
-		if plan.filter.evaluate(file) != truthTrue {
-			continue
-		}
-
 		keys := make([]any, len(plan.groupBy))
 		for i, field := range plan.groupBy {
 			keys[i] = canonicalValue(value(file, field))
@@ -139,7 +135,7 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 		// JSON encodes tuple boundaries, nulls, and string escaping unambiguously.
 		encoded, err := json.Marshal(keys)
 		if err != nil {
-			return result, fmt.Errorf("encode group key: %w", err)
+			return fmt.Errorf("encode group key: %w", err)
 		}
 		key := string(encoded)
 		g := groups[key]
@@ -150,16 +146,20 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 		for expr, a := range g.aggregates {
 			a.observe(expr, file)
 		}
+		return nil
+	})
+	if err != nil {
+		return result, stats, err
 	}
 	ordered := make([]*group, 0, len(groups))
 	for _, g := range groups {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return result, stats, err
 		}
 		for expr, a := range g.aggregates {
 			v, err := a.finish(expr)
 			if err != nil {
-				return result, err
+				return result, stats, err
 			}
 			g.values[expr.label()] = v
 		}
@@ -182,14 +182,14 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 		return false
 	})
 	if err := ctx.Err(); err != nil {
-		return result, err
+		return result, stats, err
 	}
 	if plan.limit >= 0 && len(ordered) > plan.limit {
 		ordered = ordered[:plan.limit]
 	}
 	for _, g := range ordered {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return result, stats, err
 		}
 		row := make([]any, len(plan.selections))
 		for i, expr := range plan.selections {
@@ -197,5 +197,5 @@ func executeGrouped(ctx context.Context, plan Plan, files map[string]catalog.Fil
 		}
 		result.Rows = append(result.Rows, row)
 	}
-	return result, nil
+	return result, stats, nil
 }

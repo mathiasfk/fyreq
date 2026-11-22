@@ -68,3 +68,16 @@ func (c *condition) evaluate(file catalog.File) truth {
 		return matches(file, c.predicate)
 	}
 }
+
+// fields collects the record fields the condition reads.
+func (c *condition) fields(into map[string]bool) {
+	if c == nil {
+		return
+	}
+	if c.op == "" {
+		into[c.predicate.field] = true
+		return
+	}
+	c.left.fields(into)
+	c.right.fields(into)
+}
