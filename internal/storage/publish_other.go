@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package storage
 
@@ -11,3 +11,5 @@ func publicationSupported() error {
 func publish(source, destination, directory string) (bool, error) {
 	return false, publicationSupported()
 }
+
+func syncDirectory(string) error { return publicationSupported() }

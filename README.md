@@ -4,15 +4,15 @@ FyreQ is the foundation of a filesystem metadata catalog and query engine writte
 in Go. It maintains one persistent catalog, collects metadata without reading file
 contents, and exposes a small SQL-like language through a CLI.
 
-The initial target is macOS. Linux and Windows support, background collection,
+The supported platforms are macOS and Linux. Windows support, background collection,
 filesystem notifications, process inspection, and a TUI are planned. The current
-implementation uses only the Go standard library, including its own persistence
-and query execution code.
+implementation uses only the Go standard library, including its own binary
+storage format and query execution code.
 
 ## Requirements
 
 - Go 1.24 or newer.
-- macOS for the supported runtime. Other operating systems are not validated yet.
+- macOS or Linux for the supported runtime. Other operating systems are not validated yet.
 - Read access to the directories you want to collect. macOS privacy controls may
   require granting your terminal Full Disk Access for protected locations.
 
@@ -33,7 +33,8 @@ go run ./cmd/fyreq help
 ```
 
 The catalog defaults to `fyreq` inside Go's user configuration directory. On
-macOS this is normally `~/Library/Application Support/fyreq`. Use `--data-dir` to
+macOS this is normally `~/Library/Application Support/fyreq`; on Linux it is
+`$XDG_CONFIG_HOME/fyreq`, normally `~/.config/fyreq`. Use `--data-dir` to
 choose a different location. Global flags must precede the command.
 
 ## Quick start
@@ -86,33 +87,46 @@ To collect the accessible filesystem, omit the path:
 ```
 
 This can take a long time, crosses mounted directories encountered during
-traversal, and will commonly encounter inaccessible regions. It never starts
+traversal, and will commonly encounter inaccessible regions. On Linux this
+includes pseudo-filesystems such as `/proc` and `/sys`; index explicit paths to
+avoid them. It never starts
 automatically when opening the CLI or querying. Symlinks are recorded without
 following them, so a symlink to another tree does not make that tree covered.
 There is no separate volume discovery service yet.
 
 Paths select a region to update within the same catalog; they do not create
-separate indexes. Any path can be queried, but paths not yet collected have no
-records. Inspect coverage before interpreting an empty result as absence.
+separate indexes. Each indexed path becomes a known root, recorded in coverage.
+Indexing a known root rescans it. Any path can be queried, but paths not yet
+collected have no records. Inspect coverage before interpreting an empty result
+as absence.
 
-Update the catalog after filesystem changes:
+Update the catalog after filesystem changes by revisiting every known root:
 
 ```sh
-./bin/fyreq refresh "$HOME/Projects"
+./bin/fyreq refresh
 ./bin/fyreq --json query "SELECT name, path, modified_at FROM files LIMIT 10"
 ./bin/fyreq --json status
 ```
 
-`index` and `refresh` currently perform the same reconciliation. A complete scan
+`refresh` takes no arguments; use `index PATH` to add or rescan one root. It
+rescans known roots in lexical order, each published separately, and fails when
+no root is known. Overlapping roots are each scanned. A root removed after
+`refresh` lists the roots, for example by a concurrent `clear`, is skipped rather
+than re-added. Both commands use the same reconciliation. A complete scan
 removes unobserved records within its root. An incomplete scan saves observed
 records, retains all unobserved records, records diagnostics, and exits with code
 1. This conservative policy can retain stale records until a complete scan of
 the relevant region succeeds. Up to 100 error messages are retained per root;
 the error count includes all collection errors.
 
-On macOS, collection includes the filesystem owner ID (`owner_id`, a decimal UID string) and its
+Updates only write records whose metadata changed: a refresh in which one file
+changed writes one small segment and a new manifest. Unchanged records keep
+their `indexed_at` value, the time their current metadata was first recorded;
+coverage `completed_at` reports when a root was last verified.
+
+On macOS and Linux, collection includes the filesystem owner ID (`owner_id`, a decimal UID string) and its
 best-effort account name (`owner`). Ownership is distinct from document authorship.
-Version-1 catalogs lack a platform and are rejected by queries and indexing; collect
+Catalogs from earlier versions, which used a JSON file, are rejected by queries and indexing; collect
 into a new catalog directory with `--data-dir` to leave the old catalog untouched,
 or use `clear` to discard the old catalog before collecting again. Unresolved account names are null even if the UID is
 known; UID zero is represented as `"0"`. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
@@ -148,23 +162,47 @@ more characters, `_` for one). `ESCAPE` makes wildcard characters literal:
 ./bin/fyreq query "SELECT path FROM files WHERE name LIKE 'report!_!%.txt' ESCAPE '!'"
 ```
 
+Prefix a query with `EXPLAIN` to show its plan, including how many storage
+segments and blocks per-block statistics allow it to skip, without reading
+records. `EXPLAIN ANALYZE` runs the query and reports the rows and bytes actually
+read, the rows returned, and the execution time:
+
+```sh
+./bin/fyreq query "EXPLAIN SELECT path FROM files WHERE size > 1048576"
+./bin/fyreq query "EXPLAIN ANALYZE SELECT path FROM files WHERE path LIKE '/usr/lib/%' LIMIT 10"
+```
+
+Export the whole catalog as JSON for testing and debugging:
+
+```sh
+./bin/fyreq export > catalog-export.json
+```
+
+The export is one JSON object read from a single generation: `format_version`,
+`platform`, `generation`, `updated_at`, `entries`, `coverage`, the storage
+`segments`, and `files`, an array of every record in ascending path order,
+including the internal native `identity`. Output is streamed; if export fails
+partway the output is truncated and the command exits nonzero.
 ## Commands
 
 | Command | Behavior |
 | --- | --- |
-| `index [PATH]` | Collect a region into the global catalog; default `/` |
-| `refresh [PATH]` | Reconcile a region; default `/` |
-| `query SQL` | Query recorded metadata without accessing the live filesystem |
+| `index [PATH]` | Collect a region into the global catalog and add it to the known roots; default `/` |
+| `refresh` | Rescan every known root |
+| `query SQL` | Query recorded metadata without accessing the live filesystem; supports `EXPLAIN [ANALYZE]` |
 | `status` | Show generation, entry count, and coverage |
+| `export` | Write the catalog to standard output as JSON |
 | `clear` | Remove all records and coverage from the selected catalog |
 | `shell` | Start an interactive query session |
 | `help` | Show usage |
 
 Add `--json` before a one-shot command for structured output. Query JSON contains
-`columns`, `rows`, `generation`, and `coverage`. Text query output quotes strings
+`columns`, `rows`, `generation`, and `coverage`; plans add `"explain": true` and
+have a single `plan` column with one row per line. `export` always writes JSON. Text query output quotes strings
 to safely represent filenames containing tabs, newlines, and terminal controls.
 Index and refresh JSON output is an array of per-root outcomes with coverage,
-`attempted`, `publication.published`, and the published generation. A published
+`attempted`, `skipped` for refreshed roots no longer indexed, `publication.published`,
+and the published generation. A published
 update with a persistence confirmation error exits nonzero while retaining the new
 generation. Reopening proves visibility, not durability. Errors go to stderr;
 successful commands exit with code 0, errors with code 1.
@@ -186,7 +224,9 @@ before publication preserves the previous state; a persistence confirmation erro
 after publication reports the visible generation and exits nonzero. `--json clear`
 returns `published` and, when published, `generation`. Unlike queries and indexing,
 `clear` does not read or validate the old catalog: it can replace legacy, corrupt,
-or incompatible catalogs with an empty catalog in the current format.
+or incompatible catalogs with an empty catalog in the current format. After
+publication it removes segment files the empty catalog no longer references and
+any legacy `catalog.json`.
 
 ## Development
 
@@ -196,16 +236,20 @@ go test -race ./...
 go vet ./...
 ```
 
-Tests use temporary directories and exercise query parsing and execution,
-reconciliation, symbolic links, persistence, writer locking, cancellation, and the
-CLI flow from collection through querying and deletion.
+Tests use temporary directories and exercise query parsing, pruning, and execution,
+reconciliation, symbolic links, persistence, deltas and compaction, corruption
+detection, writer locking, readers concurrent with writers, cancellation, and the
+CLI flow from collection through querying, export, and deletion.
 
 ## Current limits
 
-- The catalog is a versioned JSON snapshot loaded into memory. Queries perform a
-  full scan with in-memory sorting; there are no secondary search indexes yet.
-- Every update rewrites the snapshot. This foundation is intended to validate
-  boundaries and behavior before introducing scalable storage structures.
+- The catalog is stored as versioned, columnar binary segments sorted by path.
+  Queries read only the columns they need and skip blocks using per-block
+  minimum/maximum statistics, but there are no secondary indexes: filters on
+  fields that do not cluster by path still read most blocks.
+- Collection still walks the whole root, and reconciliation holds the root's
+  existing records and the changed records in memory. Sorting and grouping are
+  in memory; `LIMIT` with `ORDER BY` keeps only the requested rows.
 - There is no daemon, periodic refresh, event watcher, live query fallback,
   content indexing, process inspection, joins, or TUI.
 - Internal record IDs are retained at the same path when native identity agrees.
@@ -216,11 +260,13 @@ CLI flow from collection through querying and deletion.
   filename encodings outside valid UTF-8 are not normalized or fully modeled.
 - One writer is allowed. A crash can leave `.writer-lock` in the catalog
   directory. Verify that no writer is running before manually removing that
-  empty directory. Old temporary `.catalog-*.tmp` files can also be removed
-  when no writer is running.
-- Snapshot replacement and directory syncing target macOS. There is no WAL,
-  automatic corruption repair, or schema migration. Unsupported versions fail
-  explicitly; storage failures should be investigated before retrying a write.
+  empty directory. Segment files and temporary `.manifest-*.tmp` files left by an
+  interrupted writer are removed by the next successful write.
+- Manifest replacement and directory syncing target macOS and Linux local
+  filesystems. Checksums detect corruption, but there is no WAL, automatic
+  corruption repair, or migration from older catalog formats. Unsupported
+  versions fail explicitly; storage failures should be investigated before
+  retrying a write.
 
 See [architecture](docs/architecture.md), the [query language](docs/query-language.md),
 and [architecture decisions](docs/decisions/0001-foundation.md).

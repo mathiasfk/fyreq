@@ -5,6 +5,7 @@ package query
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -50,11 +51,16 @@ type Plan struct {
 	grouped    bool
 	order      []ordering
 	limit      int
+	explain    bool
+	analyze    bool
 }
 
+// Result rows are projected values. Explain results have one plan column
+// whose rows are human-readable plan lines.
 type Result struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
+	Explain bool     `json:"explain,omitempty"`
 }
 
 type token struct {
@@ -301,9 +307,9 @@ func (p *parser) comparison() (*condition, error) {
 	return &condition{predicate: predicate{field: field, op: op.text, value: value}}, nil
 }
 
-// Parse accepts SELECT fields or aggregates FROM files, optional WHERE,
-// GROUP BY, ORDER BY, and LIMIT clauses in that order. Keywords and fields are
-// case-insensitive; string values are exact.
+// Parse accepts an optional EXPLAIN [ANALYZE] prefix, then SELECT fields or
+// aggregates FROM files, optional WHERE, GROUP BY, ORDER BY, and LIMIT clauses
+// in that order. Keywords and fields are case-insensitive; string values are exact.
 func Parse(input string) (Plan, error) {
 	tokens, err := lex(input)
 	if err != nil {
@@ -311,6 +317,10 @@ func Parse(input string) (Plan, error) {
 	}
 	p := parser{tokens: tokens}
 	plan := Plan{limit: -1}
+	if p.accept("EXPLAIN") {
+		plan.explain = true
+		plan.analyze = p.accept("ANALYZE")
+	}
 	if err := p.expect("SELECT"); err != nil {
 		return plan, err
 	}
@@ -518,56 +528,132 @@ func compareValues(a, b any) int {
 
 // Execute filters records, sorts matches, and applies the limit before projection.
 // Nulls sort last in both directions, with ascending path as the final tie-breaker.
-// Secondary indexes can replace this in-memory full scan later.
-func Execute(ctx context.Context, plan Plan, files map[string]catalog.File) (Result, error) {
-	result := Result{Columns: append([]string(nil), plan.columns...), Rows: make([][]any, 0)}
+// EXPLAIN plans describe the execution instead of returning its rows.
+func Execute(ctx context.Context, plan Plan, source Source) (Result, error) {
 	if len(plan.columns) == 0 {
-		return result, fmt.Errorf("query plan must be created by Parse")
+		return Result{Columns: []string{}, Rows: make([][]any, 0)}, fmt.Errorf("query plan must be created by Parse")
 	}
+	if plan.explain {
+		return explain(ctx, plan, source)
+	}
+	result, _, err := run(ctx, plan, source)
+	return result, err
+}
+
+// errStop ends a scan early once a streaming execution has enough rows.
+var errStop = errors.New("scan stopped")
+
+func run(ctx context.Context, plan Plan, source Source) (Result, ScanStats, error) {
+	result := Result{Columns: append([]string(nil), plan.columns...), Rows: make([][]any, 0)}
 	if err := ctx.Err(); err != nil {
-		return result, err
+		return result, ScanStats{}, err
 	}
 	if plan.limit == 0 {
-		return result, nil
+		return result, ScanStats{}, nil
 	}
 	if plan.grouped {
-		return executeGrouped(ctx, plan, files)
+		return executeGrouped(ctx, plan, source)
 	}
-	paths := make([]string, 0, len(files))
-	for path, file := range files {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		if plan.filter.evaluate(file) == truthTrue {
-			paths = append(paths, path)
-		}
-	}
-	sort.Slice(paths, func(i, j int) bool {
-		a, b := files[paths[i]], files[paths[j]]
-		for _, term := range plan.order {
-			av, bv := value(a, term.expression.field), value(b, term.expression.field)
-			if comparison := compareOrdered(av, bv, term.descending); comparison != 0 {
-				return comparison < 0
-			}
-		}
-		return paths[i] < paths[j]
-	})
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	if plan.limit >= 0 && len(paths) > plan.limit {
-		paths = paths[:plan.limit]
-	}
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		file := files[path]
+	request := plan.Request()
+	project := func(file catalog.File) []any {
 		row := make([]any, len(plan.columns))
 		for j, column := range plan.columns {
 			row[j] = value(file, column)
 		}
-		result.Rows = append(result.Rows, row)
+		return row
 	}
-	return result, nil
+	var files []catalog.File
+	var top *topN
+	visit := func(file catalog.File) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		switch {
+		case plan.scanOrdered():
+			result.Rows = append(result.Rows, project(file))
+			if plan.limit > 0 && len(result.Rows) == plan.limit {
+				return errStop
+			}
+		case top != nil:
+			top.offer(file)
+		default:
+			files = append(files, file)
+		}
+		return nil
+	}
+	if !plan.scanOrdered() && plan.limit > 0 {
+		top = &topN{limit: plan.limit, less: plan.less}
+	}
+	stats, err := source.Scan(ctx, request, visit)
+	if err != nil && !errors.Is(err, errStop) {
+		return result, stats, err
+	}
+	if plan.scanOrdered() {
+		return result, stats, nil
+	}
+	if top != nil {
+		files = top.sorted()
+	} else {
+		sort.Slice(files, func(i, j int) bool { return plan.less(files[i], files[j]) })
+	}
+	if err := ctx.Err(); err != nil {
+		return result, stats, err
+	}
+	for _, file := range files {
+		result.Rows = append(result.Rows, project(file))
+	}
+	return result, stats, nil
+}
+
+// less orders records by the ORDER BY terms, then by ascending path.
+func (plan Plan) less(a, b catalog.File) bool {
+	for _, term := range plan.order {
+		av, bv := value(a, term.expression.field), value(b, term.expression.field)
+		if comparison := compareOrdered(av, bv, term.descending); comparison != 0 {
+			return comparison < 0
+		}
+	}
+	return a.Path < b.Path
+}
+
+// scanOrdered reports whether the source's ascending path order already is the
+// result order, which allows streaming and stopping at the limit. Paths are
+// unique, so terms after an ascending path term never apply.
+func (plan Plan) scanOrdered() bool {
+	if plan.grouped {
+		return false
+	}
+	return len(plan.order) == 0 || (plan.order[0].expression.field == "path" && !plan.order[0].descending)
+}
+
+// Request lists the fields execution reads, so sources can skip the others.
+func (plan Plan) Request() Request {
+	filter := make(map[string]bool)
+	plan.filter.fields(filter)
+	needed := make(map[string]bool)
+	for field := range filter {
+		needed[field] = true
+	}
+	for _, selection := range plan.selections {
+		needed[selection.field] = true
+	}
+	for _, term := range plan.order {
+		needed[term.expression.field] = true
+	}
+	for _, field := range plan.groupBy {
+		needed[field] = true
+	}
+	if !plan.grouped {
+		needed["path"] = true
+	}
+	request := Request{filter: plan.filter}
+	for _, field := range fields {
+		if filter[field] {
+			request.FilterFields = append(request.FilterFields, field)
+		}
+		if needed[field] {
+			request.Fields = append(request.Fields, field)
+		}
+	}
+	return request
 }

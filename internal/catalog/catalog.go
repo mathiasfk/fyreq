@@ -2,17 +2,13 @@
 package catalog
 
 import (
-	"fmt"
-	"runtime"
 	"time"
-
-	"fyreq/internal/pathpolicy"
 )
-
-const Version = 2
 
 // File describes one observed directory entry. Paths are absolute; symbolic links
 // describe the link itself, not its target. ID is an internal record identifier.
+// IndexedAt is when the current metadata values were first recorded; reobserving
+// unchanged metadata does not rewrite the record.
 type File struct {
 	ID         string    `json:"id"`
 	Path       string    `json:"path"`
@@ -27,8 +23,24 @@ type File struct {
 	Owner   *string `json:"owner"`
 }
 
+// SameMetadata reports whether two observations of a path carry identical
+// recorded values, ignoring when they were recorded.
+func SameMetadata(a, b File) bool {
+	return a.ID == b.ID && a.Path == b.Path && a.Name == b.Name && a.Kind == b.Kind &&
+		a.Size == b.Size && a.ModifiedAt.Equal(b.ModifiedAt) && a.Identity == b.Identity &&
+		sameOptional(a.OwnerID, b.OwnerID) && sameOptional(a.Owner, b.Owner)
+}
+
+func sameOptional(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // Coverage describes the last attempt to scan a root. An incomplete attempt does
 // not establish that previously recorded, unobserved files have disappeared.
+// Coverage roots are the catalog's known roots, revisited by refresh.
 type Coverage struct {
 	Root        string    `json:"root"`
 	StartedAt   time.Time `json:"started_at"`
@@ -38,41 +50,26 @@ type Coverage struct {
 	Errors      []string  `json:"errors,omitempty"`
 }
 
-type Snapshot struct {
-	Platform   string              `json:"platform"`
-	Version    int                 `json:"version"`
-	Generation uint64              `json:"generation"`
-	UpdatedAt  time.Time           `json:"updated_at"`
-	Files      map[string]File     `json:"files"`
-	Coverage   map[string]Coverage `json:"coverage"`
+// Header summarizes one published catalog generation without its records.
+type Header struct {
+	FormatVersion int                 `json:"format_version"`
+	Platform      string              `json:"platform"`
+	Generation    uint64              `json:"generation"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+	Entries       uint64              `json:"entries"`
+	Coverage      map[string]Coverage `json:"coverage"`
 }
 
-func New() Snapshot {
-	return Snapshot{Version: Version, Platform: runtime.GOOS, Files: make(map[string]File), Coverage: make(map[string]Coverage)}
-}
-
-func (s Snapshot) Validate() error {
-	if s.Version == 1 {
-		return fmt.Errorf("catalog version 1 has no platform; collect into a new catalog directory")
-	}
-	if s.Version != Version {
-		return fmt.Errorf("unsupported catalog version %d (expected %d)", s.Version, Version)
-	}
-	if s.Platform != runtime.GOOS {
-		return fmt.Errorf("catalog platform %q is incompatible with runtime %q", s.Platform, runtime.GOOS)
-	}
-	if s.Files == nil || s.Coverage == nil {
-		return fmt.Errorf("catalog is missing files or coverage")
-	}
-	for path, file := range s.Files {
-		if !pathpolicy.Valid(path) || file.Path != path || file.ID == "" {
-			return fmt.Errorf("invalid catalog record at %q", path)
-		}
-	}
-	for root, coverage := range s.Coverage {
-		if !pathpolicy.Valid(root) || coverage.Root != root {
-			return fmt.Errorf("invalid coverage root %q", root)
-		}
-	}
-	return nil
+// Segment describes one persisted storage unit for diagnostics and plans.
+// Base segments hold disjoint path ranges; delta segments overlay them, newest
+// first, and may contain tombstones.
+type Segment struct {
+	Name       string `json:"name"`
+	Level      string `json:"level"`
+	Records    uint64 `json:"records"`
+	Tombstones uint64 `json:"tombstones"`
+	Blocks     int    `json:"blocks"`
+	Bytes      int64  `json:"bytes"`
+	MinPath    string `json:"min_path"`
+	MaxPath    string `json:"max_path"`
 }

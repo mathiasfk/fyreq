@@ -10,7 +10,26 @@ import (
 
 	"fyreq/internal/app"
 	"fyreq/internal/catalog"
+	"fyreq/internal/query"
 )
+
+// emptySnapshot is a snapshot without records at a fixed generation.
+type emptySnapshot struct{ generation uint64 }
+
+func (s emptySnapshot) Header() catalog.Header {
+	return catalog.Header{Generation: s.generation, Coverage: map[string]catalog.Coverage{}}
+}
+func (emptySnapshot) Segments() []catalog.Segment { return nil }
+func (emptySnapshot) Close() error                { return nil }
+func (emptySnapshot) Records(context.Context, func(catalog.File) error) error {
+	return nil
+}
+func (emptySnapshot) Scan(ctx context.Context, r query.Request, visit func(catalog.File) error) (query.ScanStats, error) {
+	return query.Records{}.Scan(ctx, r, visit)
+}
+func (emptySnapshot) Estimate(ctx context.Context, r query.Request) (query.ScanStats, error) {
+	return query.Records{}.Estimate(ctx, r)
+}
 
 type failingRepository struct{}
 
@@ -18,8 +37,8 @@ func (failingRepository) Clear(context.Context) (app.UpdateResult, error) {
 	return app.UpdateResult{Published: true, Generation: 7}, errors.New("sync failed")
 }
 
-func (failingRepository) Load(context.Context) (catalog.Snapshot, error) { return catalog.New(), nil }
-func (failingRepository) Update(context.Context, func(*catalog.Snapshot) error) (app.UpdateResult, error) {
+func (failingRepository) Open(context.Context) (app.Snapshot, error) { return emptySnapshot{}, nil }
+func (failingRepository) Update(context.Context, func(app.Transaction) error) (app.UpdateResult, error) {
 	return app.UpdateResult{Published: true, Generation: 7}, errors.New("sync failed")
 }
 

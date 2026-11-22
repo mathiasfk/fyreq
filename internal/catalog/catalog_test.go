@@ -1,28 +1,28 @@
 package catalog
 
 import (
-	"strings"
 	"testing"
+	"time"
 )
 
-func TestPlatformCheckedBeforePaths(t *testing.T) {
-	s := New()
-	s.Platform = "incompatible"
-	s.Files["relative"] = File{Path: "relative"}
-	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "platform") {
-		t.Fatalf("expected platform error: %v", err)
+func TestSameMetadataIgnoresObservationTime(t *testing.T) {
+	owner, other := "0", "0"
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	a := File{ID: "x", Path: "/a", Size: 1, ModifiedAt: now, IndexedAt: now, OwnerID: &owner}
+	b := a
+	b.IndexedAt = now.Add(time.Hour)
+	b.ModifiedAt = now.In(time.FixedZone("x", 3600))
+	b.OwnerID = &other
+	if !SameMetadata(a, b) {
+		t.Fatal("equal metadata reported as changed")
 	}
-}
-
-func TestInvalidPathsAndCoverage(t *testing.T) {
-	s := New()
-	s.Files["relative"] = File{ID: "x", Path: "relative"}
-	if err := s.Validate(); err == nil {
-		t.Fatal("accepted relative record")
+	b.OwnerID = nil
+	if SameMetadata(a, b) {
+		t.Fatal("ownership change not detected")
 	}
-	s = New()
-	s.Coverage["relative"] = Coverage{Root: "relative"}
-	if err := s.Validate(); err == nil {
-		t.Fatal("accepted relative coverage")
+	b = a
+	b.Size = 2
+	if SameMetadata(a, b) {
+		t.Fatal("size change not detected")
 	}
 }

@@ -34,7 +34,7 @@ func TestParseAndExecute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := Execute(context.Background(), plan, files)
+			result, err := Execute(context.Background(), plan, Records(files))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +110,7 @@ func TestOrderBy(t *testing.T) {
 			}
 			// Repetition verifies that equal keys do not inherit map iteration order.
 			for range 5 {
-				result, err := Execute(context.Background(), plan, files)
+				result, err := Execute(context.Background(), plan, Records(files))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -146,7 +146,7 @@ func TestOwnershipQueriesAndUnavailableValues(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := Execute(context.Background(), plan, files)
+		result, err := Execute(context.Background(), plan, Records(files))
 		if err != nil || !reflect.DeepEqual(result.Rows, tc.want) {
 			t.Errorf("%s: got %#v, error %v; want %#v", tc.sql, result.Rows, err, tc.want)
 		}
@@ -158,16 +158,16 @@ func TestWildcardAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), plan, map[string]catalog.File{"/a": {Path: "/a"}})
+	result, err := Execute(context.Background(), plan, Records{"/a": {Path: "/a"}})
 	if err != nil || len(result.Columns) != 9 || len(result.Rows) != 1 {
 		t.Fatalf("unexpected result: %#v, %v", result, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Execute(ctx, plan, nil); !errors.Is(err, context.Canceled) {
+	if _, err := Execute(ctx, plan, Records(nil)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
 	}
-	if _, err := Execute(context.Background(), Plan{}, nil); err == nil {
+	if _, err := Execute(context.Background(), Plan{}, Records(nil)); err == nil {
 		t.Fatal("expected invalid plan error")
 	}
 }

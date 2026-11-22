@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -12,6 +13,10 @@ import (
 	"fyreq/internal/query"
 )
 
+// ErrRootNotIndexed reports that a refresh found its root removed from the
+// catalog, for example by a concurrent clear, after the roots were listed.
+var ErrRootNotIndexed = errors.New("root is no longer indexed")
+
 // UpdateResult reports the commit boundary. Published remains true on a later
 // confirmation error, with Generation identifying the visible replacement.
 type UpdateResult struct {
@@ -19,15 +24,32 @@ type UpdateResult struct {
 	Generation uint64 `json:"generation,omitempty"`
 }
 
-// Repository loads snapshots and serializes updates. Update gives the callback a
-// private working snapshot that it must not retain. Callback errors or cancellation
+// Snapshot is one consistent published generation. It remains readable after
+// later publications until closed. Records visits complete records, including
+// internal fields, in ascending path order.
+type Snapshot interface {
+	query.Source
+	Header() catalog.Header
+	Segments() []catalog.Segment
+	Records(context.Context, func(catalog.File) error) error
+	Close() error
+}
+
+// Transaction is a private working catalog for one update. It must not be
+// retained after the update callback returns.
+type Transaction interface {
+	indexing.Catalog
+	Coverage() map[string]catalog.Coverage
+}
+
+// Repository opens snapshots and serializes updates. Callback errors or cancellation
 // before publication leave the prior generation untouched. A published result and
 // error means the replacement is visible but persistence confirmation failed.
 // Clear replaces the catalog without loading it and starts generation history anew.
 type Repository interface {
-	Load(context.Context) (catalog.Snapshot, error)
+	Open(context.Context) (Snapshot, error)
 	Clear(context.Context) (UpdateResult, error)
-	Update(context.Context, func(*catalog.Snapshot) error) (UpdateResult, error)
+	Update(context.Context, func(Transaction) error) (UpdateResult, error)
 }
 
 type App struct {
@@ -41,16 +63,20 @@ type RootResolver interface {
 	DefaultRoots(context.Context) ([]string, error)
 }
 
+// RootOutcome reports one root. Skipped means a refresh found the root removed
+// from the catalog before its update began, so nothing was collected.
 type RootOutcome struct {
 	Root        string           `json:"root"`
 	Attempted   bool             `json:"attempted"`
+	Skipped     bool             `json:"skipped,omitempty"`
 	Coverage    catalog.Coverage `json:"coverage"`
 	Publication UpdateResult     `json:"publication"`
 	Error       string           `json:"error,omitempty"`
 }
 
-// RefreshRoots resolves and refreshes roots in stable order, committing each separately.
-func (a App) RefreshRoots(ctx context.Context, explicit string) ([]RootOutcome, error) {
+// Index collects an explicit root, or the platform's default roots, adding each
+// root to the catalog's known roots when it is not already known.
+func (a App) Index(ctx context.Context, explicit string) ([]RootOutcome, error) {
 	var roots []string
 	if explicit != "" {
 		roots = []string{explicit}
@@ -83,6 +109,33 @@ func (a App) RefreshRoots(ctx context.Context, explicit string) ([]RootOutcome, 
 		roots = append(roots, root)
 	}
 	sort.Strings(roots)
+	return a.updateRoots(ctx, roots, false)
+}
+
+// Refresh revisits every known root in the current generation. Roots removed
+// before their own update starts are skipped rather than re-added.
+func (a App) Refresh(ctx context.Context) ([]RootOutcome, error) {
+	snapshot, err := a.Repository.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	coverage := snapshot.Header().Coverage
+	if err := snapshot.Close(); err != nil {
+		return nil, err
+	}
+	roots := make([]string, 0, len(coverage))
+	for root := range coverage {
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("no indexed roots; run index first")
+	}
+	sort.Strings(roots)
+	return a.updateRoots(ctx, roots, true)
+}
+
+// updateRoots updates roots in order, committing each separately.
+func (a App) updateRoots(ctx context.Context, roots []string, known bool) ([]RootOutcome, error) {
 	outcomes := make([]RootOutcome, len(roots))
 	for i, root := range roots {
 		outcomes[i].Root = root
@@ -94,7 +147,11 @@ func (a App) RefreshRoots(ctx context.Context, explicit string) ([]RootOutcome, 
 		}
 		outcome := &outcomes[i]
 		outcome.Attempted = true
-		result, coverage, err := a.Refresh(ctx, root)
+		result, coverage, err := a.update(ctx, root, known)
+		if errors.Is(err, ErrRootNotIndexed) && !result.Published {
+			outcome.Attempted, outcome.Skipped = false, true
+			continue
+		}
 		outcome.Coverage = coverage
 		outcome.Publication = result
 		if err != nil {
@@ -111,16 +168,21 @@ func (a App) RefreshRoots(ctx context.Context, explicit string) ([]RootOutcome, 
 	return outcomes, nil
 }
 
-// Refresh updates one region in a private repository working snapshot.
-func (a App) Refresh(ctx context.Context, root string) (UpdateResult, catalog.Coverage, error) {
+// update reconciles one region in a private repository transaction. When known
+// is set, the root must still be indexed under the writer lock, so a refresh
+// cannot resurrect a root removed after the roots were listed.
+func (a App) update(ctx context.Context, root string, known bool) (UpdateResult, catalog.Coverage, error) {
 	root, err := pathpolicy.Normalize(root)
 	if err != nil {
 		return UpdateResult{}, catalog.Coverage{}, err
 	}
 	var coverage catalog.Coverage
-	result, err := a.Repository.Update(ctx, func(snapshot *catalog.Snapshot) error {
+	result, err := a.Repository.Update(ctx, func(tx Transaction) error {
+		if _, ok := tx.Coverage()[root]; known && !ok {
+			return ErrRootNotIndexed
+		}
 		var scanErr error
-		coverage, scanErr = a.Indexer.Refresh(ctx, snapshot, root)
+		coverage, scanErr = a.Indexer.Reconcile(ctx, tx, root)
 		return scanErr
 	})
 	return result, coverage, err
@@ -138,17 +200,19 @@ func (a App) Query(ctx context.Context, input string) (QueryResult, error) {
 	if err != nil {
 		return QueryResult{}, err
 	}
-	snapshot, err := a.Repository.Load(ctx)
+	snapshot, err := a.Repository.Open(ctx)
 	if err != nil {
 		return QueryResult{}, err
 	}
-	result, err := query.Execute(ctx, plan, snapshot.Files)
-	return QueryResult{Result: result, Generation: snapshot.Generation, Coverage: snapshot.Coverage}, err
+	defer snapshot.Close()
+	header := snapshot.Header()
+	result, err := query.Execute(ctx, plan, snapshot)
+	return QueryResult{Result: result, Generation: header.Generation, Coverage: header.Coverage}, err
 }
 
 type Status struct {
 	Generation uint64                      `json:"generation"`
-	Files      int                         `json:"files"`
+	Files      uint64                      `json:"files"`
 	Coverage   map[string]catalog.Coverage `json:"coverage"`
 }
 
@@ -158,9 +222,25 @@ func (a App) Clear(ctx context.Context) (UpdateResult, error) {
 }
 
 func (a App) Status(ctx context.Context) (Status, error) {
-	snapshot, err := a.Repository.Load(ctx)
+	snapshot, err := a.Repository.Open(ctx)
 	if err != nil {
 		return Status{}, err
 	}
-	return Status{Generation: snapshot.Generation, Files: len(snapshot.Files), Coverage: snapshot.Coverage}, nil
+	defer snapshot.Close()
+	header := snapshot.Header()
+	return Status{Generation: header.Generation, Files: header.Entries, Coverage: header.Coverage}, nil
+}
+
+// Export reads one snapshot: begin receives its header and storage layout,
+// then visit receives every record in ascending path order.
+func (a App) Export(ctx context.Context, begin func(catalog.Header, []catalog.Segment) error, visit func(catalog.File) error) error {
+	snapshot, err := a.Repository.Open(ctx)
+	if err != nil {
+		return err
+	}
+	defer snapshot.Close()
+	if err := begin(snapshot.Header(), snapshot.Segments()); err != nil {
+		return err
+	}
+	return snapshot.Records(ctx, visit)
 }
