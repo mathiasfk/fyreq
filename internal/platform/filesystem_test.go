@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 
 	"fyreq/internal/catalog"
@@ -20,6 +22,9 @@ func TestScanMetadataWithoutFollowingSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skip("creating symbolic links requires Windows Developer Mode or SeCreateSymbolicLinkPrivilege")
+		}
 		t.Fatal(err)
 	}
 	files := make(map[string]catalog.File)

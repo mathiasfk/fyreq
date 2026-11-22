@@ -419,7 +419,7 @@ func writeSegment(dir string, rows []row, blockRows int) (segmentRef, error) {
 // openSegment opens and validates a manifest-referenced segment. A missing file
 // or different segment ID means a writer replaced it after the manifest was read.
 func openSegment(dir string, ref segmentRef) (*segment, error) {
-	f, err := os.Open(filepath.Join(dir, ref.name))
+	f, err := openCatalogFile(filepath.Join(dir, ref.name))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errSegmentChanged
 	}

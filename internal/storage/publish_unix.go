@@ -23,3 +23,9 @@ func syncDirectory(directory string) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+
+func openCatalogFile(path string) (*os.File, error) { return os.Open(path) }
+
+func removeStale(path string) error { return os.Remove(path) }
+
+func segmentRetiring(error) bool { return false }

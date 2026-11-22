@@ -7,7 +7,7 @@ catalog. A requested root limits collection work, not the lifetime or identity
 of the catalog. Queries read persisted observations; they do not implicitly scan
 the live filesystem.
 
-The foundation targets macOS and Linux, a CLI, explicit collection, custom
+The foundation targets macOS, Linux, and Windows, a CLI, explicit collection, custom
 binary persistence, and a small query language. Future OS adapters, a background process, and a TUI
 should reuse the same application operations.
 
@@ -35,9 +35,9 @@ repository contract; indexing depends on collector and working-catalog contracts
 Query execution receives a `query.Source`, not storage handles: it states which
 fields it needs and offers a filter that can judge groups of records by their
 statistics, and the source returns matching records in ascending path order.
-OS-specific identity extraction is isolated in `identity_unix.go` for macOS and
-Linux; other platforms have a portable fallback but are not supported or
-validated yet.
+Native metadata extraction and default roots live in OS-specific files in
+`internal/platform`. Other platforms use the portable collection fallback and
+reject catalog publication.
 
 The query plan contains validated field or aggregate selections, a tree
 of typed predicates, optional grouping keys, ordering terms, a limit, and an
@@ -71,7 +71,8 @@ rewrite records whose other values are unchanged, so writes scale with changes. 
 are `file`, `directory`, `symlink`, and `other`. Size is the OS-reported byte size;
 directory size is not a recursive total, and symlink metadata describes the link.
 
-The macOS and Linux adapter observes device and inode. Records retain their ID when
+The macOS and Linux adapter observes device and inode. On Windows, identity is
+the volume serial number and file index, and ownership uses a SID. Records retain their ID when
 reobserved at the same path with matching identity. A known replacement receives
 a new ID. Rename correlation and a normalized multi-path identity model remain
 future work. Ownership comes from the entry's native metadata; account names
@@ -106,9 +107,9 @@ Retaining all unseen records after any collection error is deliberately
 conservative. Future region-level reconciliation can safely remove entries in
 fully traversed subtrees even when a different subtree fails.
 
-Standard directory traversal reaches mounted directories present in the tree.
-There is no explicit volume enumeration, exclusion policy, scheduling, or native
-event source yet. A future daemon should own the same update operation, combine
+Standard directory traversal reaches mounted directories on macOS and Linux.
+Windows selects fixed drive-letter roots by default and does not traverse
+junctions. There is no exclusion policy, scheduling, or native event source yet. A future daemon should own the same update operation, combine
 events with periodic reconciliation, and remain the single catalog writer.
 
 ## Storage and consistency
@@ -154,9 +155,11 @@ the current manifest. A second writer, or a clear, fails immediately. This avoid
 lost updates across processes but requires manual stale-lock recovery after a
 crash.
 
-Publication writes and syncs new segments with unique names, syncs the directory,
+On macOS and Linux, publication writes and syncs new segments with unique names, syncs the directory,
 writes and syncs a private temporary manifest, replaces `manifest` by rename,
-and syncs the directory. Readers see either the previous or the new manifest.
+and syncs the directory. Windows flushes individual files, replaces the manifest
+with a same-volume Windows rename, and uses delete sharing with POSIX-style
+rename and deletion. It does not separately flush directory entries. Readers see either the previous or the new manifest.
 After publication the writer removes segment files the new manifest does not
 reference, including files left by interrupted writers. A reader opens the
 manifest and then every segment it names, verifying each segment's random ID; a
@@ -181,7 +184,8 @@ Paths and coverage roots are absolute, cleaned lexical keys with exact component
 comparison. Aliases and case variants are not unified. Each catalog records its
 origin platform and is rejected on a different platform before paths are validated.
 No cross-platform conversion is attempted. Default roots are resolved before
-sequential per-root updates; macOS and Linux currently select `/`. Earlier publications
+sequential per-root updates; macOS and Linux select `/`, and Windows selects fixed drive-letter roots in
+letter order. Earlier publications
 remain committed if a later root fails. Missing discovered roots do not authorize
 deletion.
 
@@ -198,7 +202,6 @@ expiration, crash-recovery log, migration, or guarantee against hardware failure
 - Add OS-native change notification, region-level coverage, volume discovery,
   exclusion policies, and a single-writer daemon.
 - Add process and open-file relations with explicit live-observation semantics.
-- Add a Windows adapter, accounting for native identity and path rules.
 - Add a TUI that consumes the application layer.
 
 These are extension points, not implemented features or commitments to a

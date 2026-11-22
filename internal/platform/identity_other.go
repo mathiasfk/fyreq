@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package platform
 
@@ -6,6 +6,4 @@ import "io/fs"
 
 // Other platforms can collect portable metadata, but native identity and full
 // platform support are not implemented yet.
-func identity(info fs.FileInfo) string { return "" }
-
-func ownershipID(info fs.FileInfo) (*string, error) { return nil, nil }
+func nativeMetadata(_ string, _ fs.FileInfo) (string, *string, error) { return "", nil, nil }

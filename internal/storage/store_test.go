@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package storage
 
@@ -22,6 +22,14 @@ import (
 	"fyreq/internal/catalog"
 	"fyreq/internal/query"
 )
+
+// fixturePath creates a lexical key without touching the filesystem.
+func fixturePath(path string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.FromSlash("C:" + path)
+	}
+	return path
+}
 
 func file(path string, size int64) catalog.File {
 	return catalog.File{ID: "id-" + filepath.Base(path), Path: path, Name: filepath.Base(path), Kind: "file", Size: size}
@@ -170,7 +178,7 @@ func TestClearReplacesUnreadableCatalogs(t *testing.T) {
 
 func TestClearRemovesSegments(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
-	update(t, store, []catalog.File{file("/a", 1)})
+	update(t, store, []catalog.File{file(fixturePath("/a"), 1)})
 	if len(segmentFiles(t, store.Dir)) == 0 {
 		t.Fatal("update wrote no segment")
 	}
@@ -235,7 +243,7 @@ func TestPersistenceAndFailedUpdate(t *testing.T) {
 
 func TestInvalidRecordsRejected(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
-	for _, f := range []catalog.File{{ID: "x", Path: "relative"}, {Path: "/no-id"}} {
+	for _, f := range []catalog.File{{ID: "x", Path: "relative"}, {Path: fixturePath("/no-id")}} {
 		if _, err := store.Update(context.Background(), func(tx app.Transaction) error { return tx.Put(f) }); err == nil {
 			t.Fatalf("accepted invalid record %#v", f)
 		}
@@ -271,7 +279,7 @@ func TestCanceledUpdateDoesNotPublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	_, err := store.Update(ctx, func(tx app.Transaction) error {
 		cancel()
-		return tx.Put(file("/a", 1))
+		return tx.Put(file(fixturePath("/a"), 1))
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation, got %v", err)
@@ -314,7 +322,7 @@ func TestRejectCorruptAndUnsupportedCatalog(t *testing.T) {
 
 func TestCorruptSegmentDetected(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
-	update(t, store, []catalog.File{file("/a", 1), file("/b", 2)})
+	update(t, store, []catalog.File{file(fixturePath("/a"), 1), file(fixturePath("/b"), 2)})
 	name := segmentFiles(t, store.Dir)[0]
 	path := filepath.Join(store.Dir, name)
 	data, err := os.ReadFile(path)
@@ -348,7 +356,7 @@ func TestPublicationOutcomes(t *testing.T) {
 				}
 				return after, failure
 			}
-			result, err := store.Update(context.Background(), func(tx app.Transaction) error { return tx.Put(file("/a", 1)) })
+			result, err := store.Update(context.Background(), func(tx app.Transaction) error { return tx.Put(file(fixturePath("/a"), 1)) })
 			if !errors.Is(err, failure) || result.Published != after || (after && result.Generation != 1) {
 				t.Fatalf("result: %#v %v", result, err)
 			}
@@ -367,10 +375,10 @@ func TestRecordRoundTrip(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
 	zero, name := "0", "root"
 	modified := time.Date(2026, 2, 3, 4, 5, 6, 789, time.UTC)
-	known := catalog.File{ID: "a", Path: "/dir/known", Name: "known", Kind: "file", Size: 1 << 40, ModifiedAt: modified, IndexedAt: modified.Add(time.Second), Identity: "1:2", OwnerID: &zero, Owner: &name}
-	unknown := catalog.File{ID: "b", Path: "/dir/unknown", Name: "unknown", Kind: "directory", ModifiedAt: time.Unix(-5, 3).UTC()}
-	empty := catalog.File{ID: "c", Path: "/dir/zero"}
-	coverage := catalog.Coverage{Root: "/dir", StartedAt: modified, CompletedAt: modified.Add(time.Minute), ErrorCount: 101, Errors: []string{"x: denied", "y\nz"}}
+	known := catalog.File{ID: "a", Path: fixturePath("/dir/known"), Name: "known", Kind: "file", Size: 1 << 40, ModifiedAt: modified, IndexedAt: modified.Add(time.Second), Identity: "1:2", OwnerID: &zero, Owner: &name}
+	unknown := catalog.File{ID: "b", Path: fixturePath("/dir/unknown"), Name: "unknown", Kind: "directory", ModifiedAt: time.Unix(-5, 3).UTC()}
+	empty := catalog.File{ID: "c", Path: fixturePath("/dir/zero")}
+	coverage := catalog.Coverage{Root: fixturePath("/dir"), StartedAt: modified, CompletedAt: modified.Add(time.Minute), ErrorCount: 101, Errors: []string{"x: denied", "y\nz"}}
 	if _, err := store.Update(context.Background(), func(tx app.Transaction) error {
 		for _, f := range []catalog.File{known, unknown, empty} {
 			if err := tx.Put(f); err != nil {
@@ -387,7 +395,7 @@ func TestRecordRoundTrip(t *testing.T) {
 			t.Fatalf("round trip:\n got %#v\nwant %#v", got, want)
 		}
 	}
-	if !reflect.DeepEqual(header.Coverage["/dir"], coverage) || header.Entries != 3 {
+	if !reflect.DeepEqual(header.Coverage[fixturePath("/dir")], coverage) || header.Entries != 3 {
 		t.Fatalf("coverage: %#v", header)
 	}
 }
@@ -396,7 +404,7 @@ func TestSingleChangeWritesOneSmallDelta(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
 	var initial []catalog.File
 	for i := 0; i < 5000; i++ {
-		initial = append(initial, file(fmt.Sprintf("/root/%05d", i), int64(i)))
+		initial = append(initial, file(fixturePath(fmt.Sprintf("/root/%05d", i)), int64(i)))
 	}
 	update(t, store, initial)
 	before := segmentFiles(t, store.Dir)
@@ -408,7 +416,7 @@ func TestSingleChangeWritesOneSmallDelta(t *testing.T) {
 		}
 		info[name] = fi
 	}
-	changed := file("/root/02500", 99)
+	changed := file(fixturePath("/root/02500"), 99)
 	update(t, store, []catalog.File{changed})
 	after := segmentFiles(t, store.Dir)
 	if len(after) != len(before)+1 {
@@ -434,7 +442,7 @@ func TestSingleChangeWritesOneSmallDelta(t *testing.T) {
 		t.Fatalf("unexpected view: %#v", header)
 	}
 	// Coverage-only updates write no segment.
-	if _, err := store.Update(context.Background(), func(tx app.Transaction) error { return tx.SetCoverage(catalog.Coverage{Root: "/root"}) }); err != nil {
+	if _, err := store.Update(context.Background(), func(tx app.Transaction) error { return tx.SetCoverage(catalog.Coverage{Root: fixturePath("/root")}) }); err != nil {
 		t.Fatal(err)
 	}
 	if again := segmentFiles(t, store.Dir); !reflect.DeepEqual(again, after) {
@@ -452,7 +460,7 @@ func TestRandomizedUpdatesMatchModel(t *testing.T) {
 		var puts []catalog.File
 		var deletes []string
 		for n := random.Intn(12); n >= 0; n-- {
-			path := fmt.Sprintf("/r/%c/%d", 'a'+random.Intn(4), random.Intn(15))
+			path := fixturePath(fmt.Sprintf("/r/%c/%d", 'a'+random.Intn(4), random.Intn(15)))
 			if random.Intn(3) == 0 {
 				deletes = append(deletes, path)
 				delete(model, path)
@@ -528,14 +536,14 @@ func scan(t *testing.T, store Store, sql string) (query.Result, query.ScanStats)
 
 func TestDeltasShadowFilteredRecords(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
-	update(t, store, []catalog.File{file("/a", 10), file("/b", 10), file("/c", 10)})
-	update(t, store, []catalog.File{file("/a", 1)}, "/b")
+	update(t, store, []catalog.File{file(fixturePath("/a"), 10), file(fixturePath("/b"), 10), file(fixturePath("/c"), 10)})
+	update(t, store, []catalog.File{file(fixturePath("/a"), 1)}, fixturePath("/b"))
 	result, _ := scan(t, store, "SELECT path FROM files WHERE size >= 10")
-	if want := [][]any{{"/c"}}; !reflect.DeepEqual(result.Rows, want) {
+	if want := [][]any{{fixturePath("/c")}}; !reflect.DeepEqual(result.Rows, want) {
 		t.Fatalf("rows %#v, want %#v", result.Rows, want)
 	}
 	result, _ = scan(t, store, "SELECT path, size FROM files")
-	if want := [][]any{{"/a", int64(1)}, {"/c", int64(10)}}; !reflect.DeepEqual(result.Rows, want) {
+	if want := [][]any{{fixturePath("/a"), int64(1)}, {fixturePath("/c"), int64(10)}}; !reflect.DeepEqual(result.Rows, want) {
 		t.Fatalf("rows %#v, want %#v", result.Rows, want)
 	}
 }
@@ -544,14 +552,14 @@ func TestPruningSkipsBlocksAndColumns(t *testing.T) {
 	store := Store{Dir: t.TempDir(), layout: layout{blockRows: 10, segmentRows: 100, maxDeltas: 8, minDeltaRows: 10}}
 	var files []catalog.File
 	for i := 0; i < 1000; i++ {
-		files = append(files, file(fmt.Sprintf("/data/%04d", i), int64(i)))
+		files = append(files, file(fixturePath(fmt.Sprintf("/data/%04d", i)), int64(i)))
 	}
 	update(t, store, files)
 	result, stats := scan(t, store, "SELECT path FROM files WHERE size >= 995")
 	if len(result.Rows) != 5 || stats.Segments != 10 || stats.SegmentsPruned != 9 || stats.BlocksPruned != 99 || stats.RowsRead != 10 || stats.RowsMatched != 5 {
 		t.Fatalf("rows=%d stats=%#v", len(result.Rows), stats)
 	}
-	_, prefix := scan(t, store, "SELECT name FROM files WHERE path LIKE '/data/012%'")
+	_, prefix := scan(t, store, "SELECT name FROM files WHERE path LIKE '"+fixturePath("/data/012")+"%'")
 	if prefix.RowsMatched != 10 || prefix.BlocksPruned != 99 {
 		t.Fatalf("prefix stats %#v", prefix)
 	}
@@ -572,13 +580,13 @@ func TestPruningSkipsBlocksAndColumns(t *testing.T) {
 
 func TestFilesWithinRoot(t *testing.T) {
 	store := Store{Dir: t.TempDir(), layout: layout{blockRows: 2, segmentRows: 4, maxDeltas: 8, minDeltaRows: 1000}}
-	update(t, store, []catalog.File{file("/a", 1), file("/a-b", 1), file("/a/x", 1), file("/a/y/z", 1), file("/b", 1)})
-	update(t, store, nil, "/a/x")
+	update(t, store, []catalog.File{file(fixturePath("/a"), 1), file(fixturePath("/a-b"), 1), file(fixturePath("/a/x"), 1), file(fixturePath("/a/y/z"), 1), file(fixturePath("/b"), 1)})
+	update(t, store, nil, fixturePath("/a/x"))
 	_, err := store.Update(context.Background(), func(tx app.Transaction) error {
-		if err := tx.Put(file("/a/new", 1)); err != nil {
+		if err := tx.Put(file(fixturePath("/a/new"), 1)); err != nil {
 			return err
 		}
-		files, err := tx.Files(context.Background(), "/a")
+		files, err := tx.Files(context.Background(), fixturePath("/a"))
 		if err != nil {
 			return err
 		}
@@ -587,7 +595,7 @@ func TestFilesWithinRoot(t *testing.T) {
 			paths = append(paths, path)
 		}
 		sort.Strings(paths)
-		if want := []string{"/a", "/a/new", "/a/y/z"}; !reflect.DeepEqual(paths, want) {
+		if want := []string{fixturePath("/a"), fixturePath("/a/new"), fixturePath("/a/y/z")}; !reflect.DeepEqual(paths, want) {
 			t.Fatalf("files %v, want %v", paths, want)
 		}
 		return nil

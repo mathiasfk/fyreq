@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package storage
 
@@ -46,7 +46,7 @@ func TestReadersSeeConsistentGenerationsDuringWrites(t *testing.T) {
 	for k := 1; k <= rounds; k++ {
 		files := make([]catalog.File, 0, paths)
 		for i := 0; i < paths; i++ {
-			files = append(files, file(fmt.Sprintf("/p/%03d", i), int64(k)))
+			files = append(files, file(fixturePath(fmt.Sprintf("/p/%03d", i)), int64(k)))
 		}
 		update(t, store, files)
 	}
@@ -104,7 +104,7 @@ func TestConcurrentWritersAreSerialized(t *testing.T) {
 			defer wg.Done()
 			<-start
 			result, err := store.Update(context.Background(), func(tx app.Transaction) error {
-				return tx.Put(file(fmt.Sprintf("/w/%02d", w), int64(w)))
+				return tx.Put(file(fixturePath(fmt.Sprintf("/w/%02d", w)), int64(w)))
 			})
 			if err != nil {
 				errs <- err
@@ -139,7 +139,7 @@ func TestConcurrentWritersAreSerialized(t *testing.T) {
 // unlinks every segment it references.
 func TestSnapshotSurvivesSegmentRemoval(t *testing.T) {
 	store := Store{Dir: t.TempDir()}
-	update(t, store, []catalog.File{file("/a", 1), file("/b", 2)})
+	update(t, store, []catalog.File{file(fixturePath("/a"), 1), file(fixturePath("/b"), 2)})
 	snap, err := store.Open(context.Background())
 	if err != nil {
 		t.Fatal(err)
