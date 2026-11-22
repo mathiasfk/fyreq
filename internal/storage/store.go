@@ -173,7 +173,7 @@ func (s Store) collect(m manifest) {
 		stale := (validSegmentName(name) && !live[name]) || name == legacyName ||
 			((strings.HasPrefix(name, ".manifest-") || strings.HasPrefix(name, ".catalog-")) && strings.HasSuffix(name, ".tmp"))
 		if stale && entry.Type().IsRegular() {
-			os.Remove(filepath.Join(s.Dir, name))
+			removeStale(filepath.Join(s.Dir, name))
 		}
 	}
 }

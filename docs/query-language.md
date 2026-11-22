@@ -37,7 +37,7 @@ Backslashes are literal characters rather than escape sequences.
 | `size` | Integer | OS-reported size in bytes, not recursive directory usage |
 | `modified_at` | Timestamp | Observed last modification time |
 | `indexed_at` | Timestamp | Time the record's current metadata was first recorded |
-| `owner_id` | Nullable string | Native filesystem owner ID; decimal UID text on macOS |
+| `owner_id` | Nullable string | Native filesystem owner ID (decimal UID on macOS and Linux, SID on Windows) |
 | `owner` | Nullable string | Owner account name resolved at collection time |
 
 `SELECT *` expands to the fields in the order above. Native filesystem identity
@@ -49,7 +49,11 @@ Refreshing a record whose other values are unchanged does not rewrite it, so
 
 Ownership means the filesystem owner, not the document author or original
 creator. The account name is resolved once per native owner ID per scan and can be unavailable
-even when the numeric UID is known. Ownership of symlinks describes the link.
+even when the owner ID is known. Ownership of symlinks and Windows junctions
+describes the entry itself. Windows paths use native separators. For example,
+`SELECT path FROM files WHERE path LIKE 'C:\Users\%'` matches paths under
+`C:\Users` with that exact case. Backslashes are literal unless selected with
+`ESCAPE`.
 Version-1 catalogs are rejected; collect into a new catalog directory.
 Owner IDs are scoped to their originating system or authority and matching IDs
 in different catalogs do not establish the same account.

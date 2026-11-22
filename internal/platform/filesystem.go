@@ -39,13 +39,13 @@ func (Filesystem) Scan(ctx context.Context, root string, visit func(catalog.File
 		case info.Mode()&fs.ModeSymlink != 0:
 			kind = "symlink"
 		}
-		ownerID, ownershipErr := ownershipID(info)
-		if ownershipErr != nil {
-			reportFailure(&report, path, ownershipErr)
+		identity, ownerID, metadataErr := nativeMetadata(path, info)
+		if metadataErr != nil {
+			reportFailure(&report, path, metadataErr)
 		}
 		return visit(catalog.File{
 			Path: path, Name: filepath.Base(path), Kind: kind, Size: info.Size(),
-			ModifiedAt: info.ModTime().UTC(), IndexedAt: time.Now().UTC(), Identity: identity(info),
+			ModifiedAt: info.ModTime().UTC(), IndexedAt: time.Now().UTC(), Identity: identity,
 			OwnerID: ownerID, Owner: owners.resolve(ownerID),
 		})
 	})

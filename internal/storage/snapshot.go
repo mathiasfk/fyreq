@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,11 +34,12 @@ type snapshot struct {
 // that still references a missing segment indicates damage.
 func openSnapshot(ctx context.Context, dir string) (*snapshot, error) {
 	var previous []byte
+	var previousErr error
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		data, err := os.ReadFile(filepath.Join(dir, manifestName))
+		data, err := readManifest(filepath.Join(dir, manifestName))
 		if errors.Is(err, os.ErrNotExist) {
 			if _, legacyErr := os.Stat(filepath.Join(dir, legacyName)); legacyErr == nil {
 				return nil, fmt.Errorf("legacy JSON catalog is not supported; run clear or choose a new --data-dir")
@@ -47,6 +49,9 @@ func openSnapshot(ctx context.Context, dir string) (*snapshot, error) {
 		if err != nil {
 			return nil, err
 		}
+		if previousErr != nil && bytes.Equal(previous, data) && segmentRetiring(previousErr) {
+			return nil, previousErr
+		}
 		m, err := decodeManifest(data)
 		if err != nil {
 			return nil, err
@@ -55,7 +60,7 @@ func openSnapshot(ctx context.Context, dir string) (*snapshot, error) {
 		if err == nil {
 			return s, nil
 		}
-		if !errors.Is(err, errSegmentChanged) {
+		if !errors.Is(err, errSegmentChanged) && !segmentRetiring(err) {
 			return nil, err
 		}
 		if bytes.Equal(previous, data) {
@@ -64,8 +69,17 @@ func openSnapshot(ctx context.Context, dir string) (*snapshot, error) {
 		if attempt == openAttempts {
 			return nil, fmt.Errorf("catalog changed repeatedly while opening: %w", err)
 		}
-		previous = data
+		previous, previousErr = data, err
 	}
+}
+
+func readManifest(path string) ([]byte, error) {
+	f, err := openCatalogFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 func openSegments(dir string, m manifest) (*snapshot, error) {

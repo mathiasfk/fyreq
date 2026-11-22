@@ -4,7 +4,7 @@ FyreQ is the foundation of a filesystem metadata catalog and query engine writte
 in Go. It maintains one persistent catalog, collects metadata without reading file
 contents, and exposes a small SQL-like language through a CLI.
 
-The supported platforms are macOS and Linux. Windows support, background collection,
+The supported platforms are macOS, Linux, and Windows. Background collection,
 filesystem notifications, process inspection, and a TUI are planned. The current
 implementation uses only the Go standard library, including its own binary
 storage format and query execution code.
@@ -12,7 +12,7 @@ storage format and query execution code.
 ## Requirements
 
 - Go 1.24 or newer.
-- macOS or Linux for the supported runtime. Other operating systems are not validated yet.
+- macOS, Linux, or Windows 10/11. On Windows, keep the catalog on a local NTFS volume.
 - Read access to the directories you want to collect. macOS privacy controls may
   require granting your terminal Full Disk Access for protected locations.
 
@@ -26,6 +26,15 @@ go build -o bin/fyreq ./cmd/fyreq
 ./bin/fyreq help
 ```
 
+On Windows, from PowerShell:
+
+```powershell
+go build -o .\bin\fyreq.exe ./cmd/fyreq
+.\bin\fyreq.exe index "$env:USERPROFILE\Documents"
+.\bin\fyreq.exe status
+.\bin\fyreq.exe query "SELECT path, owner_id, owner FROM files LIMIT 20"
+```
+
 You can also run the CLI without building a separate executable:
 
 ```sh
@@ -34,7 +43,7 @@ go run ./cmd/fyreq help
 
 The catalog defaults to `fyreq` inside Go's user configuration directory. On
 macOS this is normally `~/Library/Application Support/fyreq`; on Linux it is
-`$XDG_CONFIG_HOME/fyreq`, normally `~/.config/fyreq`. Use `--data-dir` to
+`$XDG_CONFIG_HOME/fyreq`, normally `~/.config/fyreq`. On Windows it is normally `%APPDATA%\fyreq`. Use `--data-dir` to
 choose a different location. Global flags must precede the command.
 
 ## Quick start
@@ -86,13 +95,13 @@ To collect the accessible filesystem, omit the path:
 # Equivalent to: ./bin/fyreq index /
 ```
 
-This can take a long time, crosses mounted directories encountered during
-traversal, and will commonly encounter inaccessible regions. On Linux this
-includes pseudo-filesystems such as `/proc` and `/sys`; index explicit paths to
-avoid them. It never starts
-automatically when opening the CLI or querying. Symlinks are recorded without
-following them, so a symlink to another tree does not make that tree covered.
-There is no separate volume discovery service yet.
+On Windows, an omitted path selects fixed drive-letter roots in letter order.
+Use an explicit path such as `D:\Projects` to limit the scan. Collection can
+take a long time and encounter inaccessible regions. On macOS and Linux it
+crosses mounted directories encountered during traversal, including Linux
+pseudo-filesystems such as `/proc` and `/sys`. Symlinks and Windows junctions
+are recorded without traversing their targets. Collection starts only when
+requested.
 
 Paths select a region to update within the same catalog; they do not create
 separate indexes. Each indexed path becomes a known root, recorded in coverage.
@@ -124,11 +133,12 @@ changed writes one small segment and a new manifest. Unchanged records keep
 their `indexed_at` value, the time their current metadata was first recorded;
 coverage `completed_at` reports when a root was last verified.
 
-On macOS and Linux, collection includes the filesystem owner ID (`owner_id`, a decimal UID string) and its
-best-effort account name (`owner`). Ownership is distinct from document authorship.
+Collection includes the filesystem owner ID (`owner_id`) and its best-effort
+account name (`owner`). The ID is a decimal UID string on macOS and Linux and a
+SID string on Windows. Ownership is distinct from document authorship.
 Catalogs from earlier versions, which used a JSON file, are rejected by queries and indexing; collect
 into a new catalog directory with `--data-dir` to leave the old catalog untouched,
-or use `clear` to discard the old catalog before collecting again. Unresolved account names are null even if the UID is
+or use `clear` to discard the old catalog before collecting again. Unresolved account names are null even if the owner ID is
 known; UID zero is represented as `"0"`. Use `IS NULL` and `IS NOT NULL` to filter unavailable values:
 
 ```sh
@@ -187,7 +197,7 @@ partway the output is truncated and the command exits nonzero.
 
 | Command | Behavior |
 | --- | --- |
-| `index [PATH]` | Collect a region into the global catalog and add it to the known roots; default `/` |
+| `index [PATH]` | Collect a region into the global catalog and add it to the known roots; defaults to `/` on macOS and Linux or to fixed drive-letter roots on Windows |
 | `refresh` | Rescan every known root |
 | `query SQL` | Query recorded metadata without accessing the live filesystem; supports `EXPLAIN [ANALYZE]` |
 | `status` | Show generation, entry count, and coverage |
@@ -253,8 +263,8 @@ CLI flow from collection through querying, export, and deletion.
 - There is no daemon, periodic refresh, event watcher, live query fallback,
   content indexing, process inspection, joins, or TUI.
 - Internal record IDs are retained at the same path when native identity agrees.
-  Renames are not correlated, and hard links have separate path records. macOS
-  device/inode identity is an observation, not an eternal identifier.
+  Renames are not correlated, and hard links have separate path records. Native
+  identity represents a filesystem observation and can be reused by the OS.
 - Path and coverage keys are absolute, cleaned lexical paths with exact string
   equality. Filesystem aliases, case variants, and native
   filename encodings outside valid UTF-8 are not normalized or fully modeled.
@@ -262,8 +272,9 @@ CLI flow from collection through querying, export, and deletion.
   directory. Verify that no writer is running before manually removing that
   empty directory. Segment files and temporary `.manifest-*.tmp` files left by an
   interrupted writer are removed by the next successful write.
-- Manifest replacement and directory syncing target macOS and Linux local
-  filesystems. Checksums detect corruption, but there is no WAL, automatic
+- Publication targets local filesystems. Windows flushes file contents before
+  replacing the manifest and does not separately confirm directory-entry
+  durability. Checksums detect corruption, but there is no WAL, automatic
   corruption repair, or migration from older catalog formats. Unsupported
   versions fail explicitly; storage failures should be investigated before
   retrying a write.
